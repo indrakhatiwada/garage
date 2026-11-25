@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Garage
+GenericName=Local Document Toolkit
+Comment=Compress PDFs and images, OCR, and convert Bikram Sambat dates — entirely offline
+Exec=garage
+Icon=garage
+Terminal=false
+Categories=Office;Utility;Graphics;
+Keywords=pdf;compress;ocr;image;nepali;bikram;sambat;redact;
+StartupNotify=true

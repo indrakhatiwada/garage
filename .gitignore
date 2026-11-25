@@ -1,0 +1,48 @@
+/target
+/dist
+/.venv
+/venv
+/build
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+engine/build
+engine/*.egg-info
+
+# Local agent configuration and instructions
+.agents/
+.codex/
+.claude/
+.cursor/
+AGENTS.md
+AGENTS.override.md
+CLAUDE.md
+GEMINI.md
+SKILL.md
+.github/copilot-instructions.md
+
+# Local credentials and environment
+.aws/
+.ssh/
+.env
+.env.*
+!.env.example
+
+# Editor, OS, and temporary files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+
+# Asset generation previews and unoptimized background originals
+/assets/icons-preview.png
+/assets/backgrounds/paper-light.png
+/assets/backgrounds/paper-dark.png
+/assets/manifest.json

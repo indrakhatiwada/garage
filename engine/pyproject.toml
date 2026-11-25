@@ -1,0 +1,20 @@
+[project]
+name = "garage-engine"
+version = "0.1.0"
+description = "Local document engine for Garage. Never opens a socket."
+requires-python = ">=3.11"
+dependencies = [
+    "pymupdf>=1.26",
+    "pillow>=11",
+    "pillow-heif>=0.20",
+    "pillow-avif-plugin>=1.4",
+    "numpy>=2",
+    "c2pa-python>=0.39",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["garage_engine*"]
