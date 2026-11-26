@@ -51,6 +51,13 @@ def check_engine(engine: Path, cwd: Path, env: dict[str, str], version: str) -> 
         raise ValueError(f'Packaged engine is missing required capabilities/version: {reply}; {result.stderr}')
 
 
+def engine_binary(path: Path) -> Path:
+    """One-directory bundles keep the executable inside a named folder."""
+    if not path.is_dir():
+        return path
+    return path / ("garage-engine.exe" if platform.system() == 'Windows' else 'garage-engine')
+
+
 def check_packages(version: str) -> None:
     env = os.environ.copy()
     for name in ('GARAGE_ENGINE', 'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV'):
@@ -64,13 +71,13 @@ def check_packages(version: str) -> None:
             stage = work / f'Garage-{version}-windows-x86_64'
             if not (stage / 'Garage.exe').is_file():
                 raise ValueError('Windows package is missing Garage.exe')
-            check_engine(stage / 'garage-engine.exe', work, env, version)
+            check_engine(engine_binary(stage / 'garage-engine'), work, env, version)
         else:
             archive = ROOT / f'dist/Garage-{version}-x86_64.tar.gz'
             with tarfile.open(archive) as package:
                 package.extractall(work, filter='data')
             stage = work / f'Garage-{version}-x86_64'
-            check_engine(stage / 'usr/bin/garage-engine', work, env, version)
+            check_engine(engine_binary(stage / 'usr/bin/garage-engine'), work, env, version)
             image = ROOT / f'dist/Garage-{version}-x86_64.AppImage'
             subprocess.run([str(image), '--appimage-extract'], cwd=work, env=env,
                            stdout=subprocess.DEVNULL, check=True, timeout=90)

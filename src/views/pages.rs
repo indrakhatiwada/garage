@@ -31,6 +31,7 @@ pub struct PagesView {
     range: Entity<InputState>,
     range_text: String,
     job: Option<String>,
+    output_dir: Option<PathBuf>,
     _observe: Subscription,
     _input: Subscription,
 }
@@ -41,6 +42,7 @@ impl PagesView {
         jobs: Entity<Jobs>,
         window: &mut Window,
         cx: &mut Context<Self>,
+        output_dir: Option<PathBuf>,
     ) -> Self {
         let range = cx.new(|cx| InputState::new(window, cx).placeholder("1-5, 8, 11-13"));
         let observe = cx.observe(&jobs, |_, _, cx| cx.notify());
@@ -59,9 +61,15 @@ impl PagesView {
             range,
             range_text: String::new(),
             job: None,
+            output_dir,
             _observe: observe,
             _input: input,
         }
+    }
+
+    pub(crate) fn set_output_dir(&mut self, dir: Option<PathBuf>, cx: &mut Context<Self>) {
+        self.output_dir = dir;
+        cx.notify();
     }
 
     pub(crate) fn accept_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
@@ -105,10 +113,12 @@ impl PagesView {
             Mode::Split => "pdf.split",
             Mode::Extract => "pdf.extract",
         };
-        let dir = first
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+        let dir = self.output_dir.clone().unwrap_or_else(|| {
+            first
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."))
+        });
         let args = match self.mode {
             Mode::Merge => json!({
                 "srcs": self.files.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
@@ -372,6 +382,7 @@ impl Render for PagesView {
                             Some(dst.clone()),
                             self.job.clone(),
                             self.jobs.clone(),
+                            self.output_dir.clone(),
                             cx,
                         ))
                         .child(

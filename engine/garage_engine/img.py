@@ -79,21 +79,24 @@ def _encode(im: Image.Image, fmt: str, quality: int, keep_icc: bool, fast: bool 
     icc = im.info.get("icc_profile") if keep_icc else None
     if fmt == "jpeg":
         im = _flatten(im)
+        # optimize/progressive add extra full encode passes (measured ~3.6x
+        # slower) without changing pixels. Exports stay fast; quality is
+        # controlled by `quality` and `subsampling`.
         im.save(
             buf,
             "JPEG",
             quality=int(quality),
-            optimize=not fast,
-            progressive=not fast,
+            optimize=False,
+            progressive=False,
             subsampling=0 if quality >= 90 else 2,
             icc_profile=icc,
         )
     elif fmt == "webp":
-        im.save(buf, "WEBP", quality=int(quality), method=2 if fast else 5, icc_profile=icc)
+        im.save(buf, "WEBP", quality=int(quality), method=1 if fast else 4, icc_profile=icc)
     elif fmt == "avif":
-        im.save(buf, "AVIF", quality=int(quality), speed=9 if fast else 6)
+        im.save(buf, "AVIF", quality=int(quality), speed=9 if fast else 8)
     else:
-        im.save(buf, "PNG", optimize=not fast, compress_level=6 if fast else 9, icc_profile=icc)
+        im.save(buf, "PNG", optimize=False, compress_level=1 if fast else 6, icc_profile=icc)
     return buf.getvalue()
 
 
@@ -107,25 +110,22 @@ def _resize(im: Image.Image, max_dim: int) -> Image.Image:
 def _fit_bytes(im: Image.Image, fmt: str, target: int, keep_icc: bool) -> tuple[bytes, Image.Image]:
     """Binary-search quality, then dimensions, to land under `target` bytes.
 
-    Search encodes are deliberately cheap (no optimize/progressive); the winner
-    is re-encoded once at full effort.
+    Every probe is a cheap encode; the winner is written as-is. Re-encoding
+    the winner at a slower setting did not change pixels, only time.
     """
     lo, hi = 30, 92
-    best_q = None
+    best = None
     for _ in range(5):
         mid = (lo + hi) // 2
         data = _encode(im, fmt, mid, keep_icc, fast=True)
         if len(data) <= target:
-            best_q = mid
+            best = (mid, data)
             lo = mid + 1
         else:
             hi = mid - 1
 
-    if best_q is not None:
-        polished = _encode(im, fmt, best_q, keep_icc, fast=False)
-        if len(polished) <= target:
-            return polished, im
-        return _encode(im, fmt, best_q, keep_icc, fast=True), im
+    if best is not None:
+        return best[1], im
 
     # Quality floor still too big: scale down and recurse once.
     data = _encode(im, fmt, 30, keep_icc, fast=True)
@@ -170,6 +170,8 @@ def compress(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     keep_icc = bool(args.get("keep_icc", False))
     suffix = str(args.get("suffix", ".min"))
     out_dir = str(args.get("out_dir") or "")
+    if not out_dir:
+        raise ValueError("choose an output folder before compressing")
 
     results: list[dict[str, Any]] = []
     before_total = after_total = 0
@@ -522,7 +524,10 @@ def redact(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     what the user actually saw. Output is always re-encoded.
     """
     src = str(args["src"])
-    dst = str(args.get("dst") or _out_path(src, "", ".redacted", ".jpg"))
+    dst = str(
+        args.get("dst")
+        or _out_path(src, str(args.get("out_dir") or ""), ".redacted", ".jpg")
+    )
     boxes = args.get("boxes") or []
     if not boxes:
         raise ValueError("no boxes")

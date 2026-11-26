@@ -258,12 +258,18 @@ fn resolve_command() -> Command {
         return Command::new(path);
     }
     if let Ok(exe) = std::env::current_exe() {
-        let sibling = exe.with_file_name(if cfg!(target_os = "windows") {
+        let name = if cfg!(target_os = "windows") {
             "garage-engine.exe"
         } else {
             "garage-engine"
-        });
-        if sibling.is_file() {
+        };
+        let sibling = exe.with_file_name(name);
+        if sibling.is_dir() {
+            let binary = sibling.join(name);
+            if binary.is_file() {
+                return Command::new(binary);
+            }
+        } else if sibling.is_file() {
             return Command::new(sibling);
         }
     }

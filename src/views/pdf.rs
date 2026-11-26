@@ -72,11 +72,17 @@ pub struct PdfView {
     preview_job: Option<String>,
     preview_path: Option<PathBuf>,
     preview_dims: Option<(u32, u32)>,
+    output_dir: Option<PathBuf>,
     _observe: Subscription,
 }
 
 impl PdfView {
-    pub fn new(engine: Engine, jobs: Entity<Jobs>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        engine: Engine,
+        jobs: Entity<Jobs>,
+        cx: &mut Context<Self>,
+        output_dir: Option<PathBuf>,
+    ) -> Self {
         let observe = cx.observe(&jobs, |_, _, cx| cx.notify());
         Self {
             engine,
@@ -93,8 +99,14 @@ impl PdfView {
             preview_job: None,
             preview_path: None,
             preview_dims: None,
+            output_dir,
             _observe: observe,
         }
+    }
+
+    pub(crate) fn set_output_dir(&mut self, dir: Option<PathBuf>, cx: &mut Context<Self>) {
+        self.output_dir = dir;
+        cx.notify();
     }
 
     fn pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -162,10 +174,7 @@ impl PdfView {
     }
 
     pub fn output_dir(&self) -> Option<PathBuf> {
-        self.path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(PathBuf::from)
+        self.output_dir.clone()
     }
 
     fn compress(&mut self, cx: &mut Context<Self>) {
@@ -181,6 +190,7 @@ impl PdfView {
                 "grayscale": self.grayscale,
                 "subset_fonts": self.subset_fonts,
                 "ghostscript": if self.ghostscript { "auto" } else { "off" },
+                "out_dir": self.output_dir.as_ref().map(|dir| dir.to_string_lossy().to_string()),
             }),
         );
         self.jobs.update(cx, |jobs, _| {
@@ -502,6 +512,7 @@ impl Render for PdfView {
                                     .map(str::to_string),
                                 self.job.clone(),
                                 self.jobs.clone(),
+                                self.output_dir.clone(),
                                 cx,
                             ))
                             .child(save_button(
@@ -512,6 +523,7 @@ impl Render for PdfView {
                                     .map(str::to_string),
                                 self.job.clone(),
                                 self.jobs.clone(),
+                                self.output_dir.clone(),
                                 cx,
                             ))
                             .child(

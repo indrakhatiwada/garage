@@ -9,5 +9,6 @@ fi
     .venv/bin/python -m pip install -e engine pyinstaller
 }
 cargo build --release --locked -j "${CARGO_BUILD_JOBS:-2}"
+rm -rf dist/garage-engine
 .venv/bin/python -m PyInstaller --noconfirm --clean --distpath dist --workpath target/pyinstaller engine/garage-engine.spec
 .venv/bin/python scripts/package-linux.py "$@"

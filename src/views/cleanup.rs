@@ -29,11 +29,17 @@ pub struct CleanupView {
     cache_dir: PathBuf,
     revision: u64,
     show_cleaned: bool,
+    output_dir: Option<PathBuf>,
     _observe: Subscription,
 }
 
 impl CleanupView {
-    pub fn new(engine: Engine, jobs: Entity<Jobs>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        engine: Engine,
+        jobs: Entity<Jobs>,
+        cx: &mut Context<Self>,
+        output_dir: Option<PathBuf>,
+    ) -> Self {
         let observe = cx.observe(&jobs, |_, _, cx| cx.notify());
         Self {
             engine,
@@ -56,8 +62,14 @@ impl CleanupView {
             )),
             revision: 0,
             show_cleaned: true,
+            output_dir,
             _observe: observe,
         }
+    }
+
+    pub(crate) fn set_output_dir(&mut self, dir: Option<PathBuf>, cx: &mut Context<Self>) {
+        self.output_dir = dir;
+        cx.notify();
     }
 
     fn pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -121,6 +133,7 @@ impl CleanupView {
             json!({
                 "src": path.to_string_lossy(), "deskew": self.deskew, "denoise": self.denoise,
                 "threshold": self.threshold, "autocrop": self.autocrop,
+                "out_dir": self.output_dir.as_ref().map(|dir| dir.to_string_lossy().to_string()),
             })
         })
     }
@@ -411,6 +424,7 @@ impl Render for CleanupView {
                         Some(dst.clone()),
                         self.job.clone(),
                         self.jobs.clone(),
+                        self.output_dir.clone(),
                         cx,
                     ))
                     .child(

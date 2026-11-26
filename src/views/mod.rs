@@ -99,13 +99,15 @@ pub fn save_button<T: 'static>(
     src: Option<String>,
     job_id: Option<String>,
     jobs: Entity<Jobs>,
+    default_dir: Option<PathBuf>,
     cx: &mut Context<T>,
 ) -> impl IntoElement {
-    save_button_labeled(id, src, job_id, jobs, "Save as…", false, cx)
+    save_button_labeled(id, src, job_id, jobs, "Save as…", false, default_dir, cx)
 }
 
 /// The same picker with an explicit label and emphasis, for flows where saving
 /// is the main action rather than an afterthought.
+#[allow(clippy::too_many_arguments)]
 pub fn save_button_labeled<T: 'static>(
     id: &'static str,
     src: Option<String>,
@@ -113,6 +115,7 @@ pub fn save_button_labeled<T: 'static>(
     jobs: Entity<Jobs>,
     label: &'static str,
     primary: bool,
+    default_dir: Option<PathBuf>,
     cx: &mut Context<T>,
 ) -> impl IntoElement {
     let view = cx.entity().downgrade();
@@ -129,16 +132,18 @@ pub fn save_button_labeled<T: 'static>(
                 return;
             };
             let source_path = PathBuf::from(&source);
-            let dir = source_path
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .map(|home| home.join("Documents"))
-                })
-                .unwrap_or_else(|| PathBuf::from("."));
+            let dir = default_dir.clone().unwrap_or_else(|| {
+                source_path
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .map(PathBuf::from)
+                    .or_else(|| {
+                        std::env::var_os("HOME")
+                            .map(PathBuf::from)
+                            .map(|home| home.join("Documents"))
+                    })
+                    .unwrap_or_else(|| PathBuf::from("."))
+            });
             let name = source_path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())

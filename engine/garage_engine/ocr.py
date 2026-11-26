@@ -156,7 +156,9 @@ def searchable_pdf(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not available():
         raise ValueError("tesseract not installed")
     src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(os.path.dirname(src), _stem(src) + ".ocr.pdf"))
+    dst = str(args.get("dst") or os.path.join(
+        str(args.get("out_dir") or os.path.dirname(src)), _stem(src) + ".ocr.pdf"
+    ))
     lang = best_lang(args.get("lang"))
     dpi = int(args.get("dpi", 300))
     doc = _open_pdf(src, args.get("password"))

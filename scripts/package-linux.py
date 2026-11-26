@@ -34,7 +34,7 @@ def main():
     if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'amd64'):
         parser.error('This packaging target is Linux x86_64.')
     for binary in (args.binary, args.engine):
-        if not binary.is_file():
+        if not binary.exists():
             parser.error(f'Missing binary: {binary}; build the app and sidecar first.')
     version = tomllib.loads((ROOT / 'Cargo.toml').read_text())['package']['version']
     cache = Path.home() / '.cache/electron-builder/appimage/appimage-12.0.1'
@@ -53,7 +53,10 @@ def main():
     licenses = stage / 'usr/share/licenses'
     licenses.mkdir(parents=True)
     shutil.copy2(args.binary, stage / 'usr/bin/garage')
-    shutil.copy2(args.engine, stage / 'usr/bin/garage-engine')
+    if args.engine.is_dir():
+        shutil.copytree(args.engine, stage / 'usr/bin/garage-engine')
+    else:
+        shutil.copy2(args.engine, stage / 'usr/bin/garage-engine')
     shutil.copy2(ROOT / 'assets/brand/garage-512.png', stage / 'garage.png')
     shutil.copy2(ROOT / 'assets/brand/garage-512.png', stage / '.DirIcon')
     shutil.copy2(ROOT / 'assets/garage.desktop', stage / 'garage.desktop')
@@ -73,7 +76,9 @@ exec "$APPDIR/usr/bin/garage" "$@"
     (stage / 'Garage').symlink_to('AppRun')
     excluded = re.compile(r'^(?:ld-linux.*|lib(?:c|m|dl|pthread|rt|resolv|util|anl)\.so(?:\..*)?)$')
     bundled = {}
-    queue = [args.binary.resolve(), args.engine.resolve()]
+    # The one-directory engine already carries its own libraries; only scan
+    # the Rust binary for extra system libraries to bundle.
+    queue = [args.binary.resolve()]
     # GPUI loads these at runtime, so they do not all appear in the ELF dependency list.
     for name in ('fontconfig', 'freetype', 'vulkan', 'wayland-client', 'wayland-cursor', 'wayland-egl', 'X11', 'Xcursor', 'Xrandr', 'Xi', 'EGL', 'GL'):
         soname = ctypes.util.find_library(name)
@@ -160,8 +165,16 @@ For broader distribution, rebuild on the oldest Linux distribution you support.
         artifacts.append(source_archive)
     hashes = []
     for path in artifacts:
-        with path.open('rb') as handle:
-            hashes.append(f'{hashlib.file_digest(handle, "sha256").hexdigest()}  {path.name}\n')
+        if path.is_dir():
+            digest = hashlib.sha256()
+            for child in sorted(p for p in path.rglob('*') if p.is_file()):
+                digest.update(child.relative_to(path).as_posix().encode())
+                with child.open('rb') as handle:
+                    digest.update(hashlib.file_digest(handle, 'sha256').digest())
+            hashes.append(f'{digest.hexdigest()}  {path.name}/\n')
+        else:
+            with path.open('rb') as handle:
+                hashes.append(f'{hashlib.file_digest(handle, "sha256").hexdigest()}  {path.name}\n')
     (dist / 'SHA256SUMS').write_text(''.join(hashes))
     print(f'Created {output}\nCreated {archive}\nMinimum glibc: {minimum}\nBundled {len(bundled)} shared libraries.')
 

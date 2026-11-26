@@ -9,6 +9,7 @@ if (-not (Test-Path '.venv/Scripts/python.exe')) {
 $python = Join-Path $root '.venv/Scripts/python.exe'
 & $python -m pip install -e engine pyinstaller
 if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed.' }
+if (Test-Path 'dist/garage-engine') { Remove-Item -Recurse -Force 'dist/garage-engine' }
 & $python -m PyInstaller --noconfirm --clean --distpath dist --workpath target/pyinstaller engine/garage-engine.spec
 if ($LASTEXITCODE -ne 0) { throw 'Engine packaging failed.' }
 $previousRustFlags = $env:RUSTFLAGS
@@ -23,7 +24,8 @@ $version = (& $python -c "import tomllib; print(tomllib.load(open('Cargo.toml','
 $stage = Join-Path $root "dist/Garage-$version-windows-x86_64"
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item target/release/garage.exe "$stage/Garage.exe" -Force
-Copy-Item dist/garage-engine.exe "$stage/garage-engine.exe" -Force
+if (Test-Path "$stage/garage-engine") { Remove-Item -Recurse -Force "$stage/garage-engine" }
+Copy-Item -Recurse -Force dist/garage-engine "$stage/garage-engine"
 Copy-Item assets/brand/garage.ico "$stage/garage.ico" -Force
 @'
 Garage for Windows
