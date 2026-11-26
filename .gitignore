@@ -1,6 +1,9 @@
 /target
 /dist
-/tests
+/tests/*
+!/tests/fixtures/
+/tests/fixtures/*
+!/tests/fixtures/bs_anchors.csv
 /.venv
 /venv
 /build
