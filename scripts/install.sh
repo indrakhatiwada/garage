@@ -21,6 +21,7 @@ fi
 .venv/bin/pip install --quiet -e engine pyinstaller
 
 echo "==> Engine sidecar"
+rm -rf "$root/dist/garage-engine"
 .venv/bin/pyinstaller --noconfirm --clean \
     --distpath "$root/dist" \
     --workpath "$root/target/pyinstaller" \
@@ -36,7 +37,10 @@ mkdir -p "$prefix/bin" \
     "$prefix/share/icons/hicolor/128x128/apps" \
     "$prefix/share/icons/hicolor/512x512/apps"
 install -m 0755 target/release/garage "$prefix/bin/garage"
-install -m 0755 dist/garage-engine "$prefix/bin/garage-engine"
+rm -rf "$prefix/lib/garage-engine"
+mkdir -p "$prefix/lib"
+cp -a dist/garage-engine "$prefix/lib/garage-engine"
+ln -sfn ../lib/garage-engine/garage-engine "$prefix/bin/garage-engine"
 install -m 0644 assets/garage.desktop "$prefix/share/applications/garage.desktop"
 install -m 0644 assets/brand/garage-app.svg \
     "$prefix/share/icons/hicolor/scalable/apps/garage.svg"

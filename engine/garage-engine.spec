@@ -35,7 +35,8 @@ a = Analysis(
         "pillow_avif",
         "PIL._tkinter_finder",
     ],
-    hookspath=[],
+    # Our hook trims PyMuPDF's unused layout models and development headers.
+    hookspath=[str(root / "engine" / "hooks")],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
@@ -52,16 +53,17 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# One-directory build: no ~75 MB archive is unpacked into /tmp on every
+# launch, so the first job is not held up by PyInstaller's bootloader.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="garage-engine",
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True,
     upx=False,
     console=True,
     disable_windowed_traceback=False,
@@ -69,4 +71,12 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=True,
+    upx=False,
+    name="garage-engine",
 )

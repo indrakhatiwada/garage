@@ -163,8 +163,13 @@ impl ImagesView {
             "{}-edited.{extension}",
             original.file_stem().unwrap_or_default().to_string_lossy()
         );
-        let directory = original.parent().unwrap_or(std::path::Path::new("."));
-        let receiver = cx.prompt_for_new_path(directory, Some(&name));
+        let directory = self.output_dir.clone().unwrap_or_else(|| {
+            original
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf()
+        });
+        let receiver = cx.prompt_for_new_path(&directory, Some(&name));
         let revision = self.edit_revision;
         self.saving = true;
         self.save_error = None;

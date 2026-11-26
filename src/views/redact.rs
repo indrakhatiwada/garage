@@ -102,6 +102,7 @@ pub struct RedactView {
     job: Option<String>,
     preview_job: Option<String>,
     focus: FocusHandle,
+    output_dir: Option<PathBuf>,
     _observe: Subscription,
 }
 
@@ -111,6 +112,7 @@ impl RedactView {
         jobs: Entity<Jobs>,
         _window: &mut Window,
         cx: &mut Context<Self>,
+        output_dir: Option<PathBuf>,
     ) -> Self {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -140,8 +142,14 @@ impl RedactView {
             job: None,
             preview_job: None,
             focus: cx.focus_handle(),
+            output_dir,
             _observe: cx.observe(&jobs, |_, _, cx| cx.notify()),
         }
+    }
+
+    pub(crate) fn set_output_dir(&mut self, dir: Option<PathBuf>, cx: &mut Context<Self>) {
+        self.output_dir = dir;
+        cx.notify();
     }
 
     pub(crate) fn accept_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
@@ -388,7 +396,11 @@ impl RedactView {
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "document".into());
-        let dir = path.parent().unwrap_or(std::path::Path::new("."));
+        let dir = self.output_dir.clone().unwrap_or_else(|| {
+            path.parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf()
+        });
         self.show_redacted = true;
         let box_values = self.box_values(None);
         let (op, args) = if self.is_pdf {
@@ -859,6 +871,7 @@ impl Render for RedactView {
                         Some(dst.clone()),
                         self.job.clone(),
                         self.jobs.clone(),
+                        self.output_dir.clone(),
                         cx,
                     ))
                     .child(

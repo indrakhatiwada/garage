@@ -2,6 +2,8 @@
 
 A local-first desktop toolkit for the documents you would rather not upload.
 
+![Garage—Images tool](assets/screenshots/garage-app.png)
+
 Garage is a native Rust window (GPUI) talking to a Python engine over a pipe.
 There is no server, no account, no telemetry, and no network calls. If the app
 is running, it works on a plane.

@@ -3,9 +3,11 @@ mod editor;
 use std::path::PathBuf;
 
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Sizable,
+    ActiveTheme, Disableable, IndexPath, Sizable,
     button::{Button, ButtonVariants},
     input::{Input, InputEvent, InputState},
+    searchable_list::SearchableVec,
+    select::{Select, SelectEvent, SelectState},
     switch::Switch,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -14,7 +16,7 @@ use serde_json::{Value, json};
 
 use super::{
     card, dropzone, error_box, field_label, file_row, heading, human_bytes, job_progress, muted,
-    note, page, panel_width, pill, result_section, save_button, saved_note, stat, success_box,
+    note, page, panel_width, pill, result_section, stat, success_box,
 };
 use crate::engine::Engine;
 use crate::jobs::{Job, Jobs, Tool};
@@ -159,6 +161,32 @@ impl Format {
     }
 }
 
+fn preset_from_label(label: &str) -> Preset {
+    match label {
+        "Web · 2400px" => Preset::Web,
+        "Max quality" => Preset::Max,
+        "Target size" => Preset::Target,
+        _ => Preset::Email,
+    }
+}
+
+fn format_from_label(label: &str) -> Format {
+    match label {
+        "WebP" => Format::Webp,
+        "PNG" => Format::Png,
+        _ => Format::Jpeg,
+    }
+}
+
+fn target_from_label(label: &str) -> u64 {
+    label
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(200)
+}
+
 pub struct ImagesView {
     engine: Engine,
     jobs: Entity<Jobs>,
@@ -168,6 +196,10 @@ pub struct ImagesView {
     format: Format,
     strip_exif: bool,
     target_kb: u64,
+    output_dir: Option<PathBuf>,
+    preset_select: Entity<SelectState<SearchableVec<String>>>,
+    format_select: Entity<SelectState<SearchableVec<String>>>,
+    target_select: Entity<SelectState<SearchableVec<String>>>,
     selected: usize,
     // Edit state
     crop: Option<Crop>,
@@ -197,6 +229,7 @@ pub struct ImagesView {
     saving: bool,
     _edit_timer: Option<Task<()>>,
     _resize_events: Vec<Subscription>,
+    _select_events: Vec<Subscription>,
     edit_revision: u64,
     job: Option<String>,
     info_job: Option<String>,
@@ -210,6 +243,7 @@ impl ImagesView {
         jobs: Entity<Jobs>,
         window: &mut Window,
         cx: &mut Context<Self>,
+        output_dir: Option<PathBuf>,
     ) -> Self {
         let observe = cx.observe(&jobs, |_, _, cx| cx.notify());
         let unique = std::time::SystemTime::now()
@@ -228,6 +262,70 @@ impl ImagesView {
                 })
             })
             .collect();
+        let preset_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    [Preset::Email, Preset::Web, Preset::Max, Preset::Target]
+                        .iter()
+                        .map(|preset| preset.label().to_string())
+                        .collect::<Vec<String>>(),
+                ),
+                Some(IndexPath::new(0)),
+                window,
+                cx,
+            )
+        });
+        let format_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    [Format::Jpeg, Format::Webp, Format::Png]
+                        .iter()
+                        .map(|format| format.label().to_string())
+                        .collect::<Vec<String>>(),
+                ),
+                Some(IndexPath::new(0)),
+                window,
+                cx,
+            )
+        });
+        let target_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(vec![
+                    "≤ 100 KB".to_string(),
+                    "≤ 200 KB".to_string(),
+                    "≤ 500 KB".to_string(),
+                ]),
+                Some(IndexPath::new(1)),
+                window,
+                cx,
+            )
+        });
+        let select_events = [
+            cx.subscribe(&preset_select, |this, _, event, cx| {
+                if let SelectEvent::Confirm(value) = event
+                    && let Some(value) = value.as_deref()
+                {
+                    this.preset = preset_from_label(value);
+                    cx.notify();
+                }
+            }),
+            cx.subscribe(&format_select, |this, _, event, cx| {
+                if let SelectEvent::Confirm(value) = event
+                    && let Some(value) = value.as_deref()
+                {
+                    this.format = format_from_label(value);
+                    cx.notify();
+                }
+            }),
+            cx.subscribe(&target_select, |this, _, event, cx| {
+                if let SelectEvent::Confirm(value) = event
+                    && let Some(value) = value.as_deref()
+                {
+                    this.target_kb = target_from_label(value);
+                    cx.notify();
+                }
+            }),
+        ];
         Self {
             engine,
             jobs,
@@ -237,6 +335,10 @@ impl ImagesView {
             format: Format::Jpeg,
             strip_exif: true,
             target_kb: 200,
+            output_dir,
+            preset_select,
+            format_select,
+            target_select,
             selected: 0,
             crop: None,
             crop_start: None,
@@ -266,12 +368,18 @@ impl ImagesView {
             saving: false,
             _edit_timer: None,
             _resize_events: resize_events,
+            _select_events: Vec::from(select_events),
             edit_revision: 0,
             job: None,
             info_job: None,
             info: None,
             _observe: observe,
         }
+    }
+
+    pub(crate) fn set_output_dir(&mut self, dir: Option<PathBuf>, cx: &mut Context<Self>) {
+        self.output_dir = dir;
+        cx.notify();
     }
 
     pub(crate) fn accept_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
@@ -346,11 +454,15 @@ impl ImagesView {
         if self.files.is_empty() {
             return;
         }
+        let Some(out_dir) = self.output_dir.clone() else {
+            return;
+        };
         let mut args = json!({
             "paths": self.files.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
             "preset": self.preset.key(),
             "format": self.format.key(),
             "strip_exif": self.strip_exif,
+            "out_dir": out_dir.to_string_lossy().to_string(),
         });
         if self.preset == Preset::Target {
             args["target_bytes"] = json!(self.target_kb * 1024);
@@ -526,56 +638,40 @@ impl Render for ImagesView {
                 cx,
             ));
 
-        let mut controls = div().flex().flex_wrap().gap_2().items_center();
-        for preset in [Preset::Email, Preset::Web, Preset::Max, Preset::Target] {
-            let selected = self.preset == preset;
-            let button = Button::new(preset.id()).label(preset.label()).small();
-            let button = if selected {
-                button.primary()
-            } else {
-                button.secondary()
-            };
-            controls = controls.child(button.on_click(cx.listener(move |this, _, _, cx| {
-                this.preset = preset;
-                cx.notify();
-            })));
-        }
-
-        let mut formats = div().flex().flex_wrap().gap_2().items_center();
-        for format in [Format::Jpeg, Format::Webp, Format::Png] {
-            let selected = self.format == format;
-            let button = Button::new(format.id()).label(format.label()).small();
-            let button = if selected {
-                button.primary()
-            } else {
-                button.ghost()
-            };
-            formats = formats.child(button.on_click(cx.listener(move |this, _, _, cx| {
-                this.format = format;
-                cx.notify();
-            })));
-        }
-
-        let mut targets = div().flex().flex_wrap().gap_2().items_center();
-        let mut target_ids = [
-            ("target-100", 100u64),
-            ("target-200", 200),
-            ("target-500", 500),
-        ];
-        for (id, kb) in target_ids.iter_mut() {
-            let selected = self.target_kb == *kb;
-            let button = Button::new(*id).label(format!("≤ {kb} KB")).small();
-            let button = if selected {
-                button.primary()
-            } else {
-                button.ghost()
-            };
-            let kb = *kb;
-            targets = targets.child(button.on_click(cx.listener(move |this, _, _, cx| {
-                this.target_kb = kb;
-                cx.notify();
-            })));
-        }
+        let compress_controls = div()
+            .flex()
+            .flex_wrap()
+            .gap_4()
+            .items_end()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(field_label("Preset", cx))
+                    .child(Select::new(&self.preset_select).w(px(190.))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(field_label("Format", cx))
+                    .child(Select::new(&self.format_select).w(px(140.))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(field_label("Target size", cx))
+                    .child(Select::new(&self.target_select).w(px(140.))),
+            );
+        let output_note = self
+            .output_dir
+            .as_ref()
+            .map(|path| format!("Saving to {}", path.display()))
+            .unwrap_or_else(|| "Choose an output folder in the sidebar first".to_string());
 
         let mut file_list = div()
             .id("image-files")
@@ -861,12 +957,9 @@ impl Render for ImagesView {
 
         if self.mode == Mode::Compress {
             body = body
-                .child(field_label("Quality preset", cx))
-                .child(controls);
-
-            if self.preset == Preset::Target {
-                body = body.child(field_label("Target", cx)).child(targets);
-            }
+                .child(field_label("Compression settings", cx))
+                .child(compress_controls)
+                .child(note(output_note, cx));
 
             body = body
                 .child(
@@ -896,7 +989,7 @@ impl Render for ImagesView {
                             Button::new("image-run")
                                 .label(if busy { "Compressing…" } else { "Compress" })
                                 .primary()
-                                .disabled(busy || count == 0)
+                                .disabled(busy || count == 0 || self.output_dir.is_none())
                                 .on_click(cx.listener(|this, _, _, cx| this.run(cx))),
                         ),
                 )
@@ -975,13 +1068,6 @@ impl Render for ImagesView {
                                                         ),
                                                         cx,
                                                     ))
-                                                    .child(save_button(
-                                                        "image-save-file",
-                                                        Some(dst),
-                                                        self.job.clone(),
-                                                        self.jobs.clone(),
-                                                        cx,
-                                                    ))
                                             })
                                             .collect::<Vec<_>>()
                                     })
@@ -990,23 +1076,17 @@ impl Render for ImagesView {
                         ),
                 );
                 body = body.child(success_box("Done. Originals were not modified.", cx));
-                if let Some(note) = saved_note(self.jobs.read(cx).saved_for(&self.job), cx) {
-                    body = body.child(note);
+                if let Some(dir) = self.output_dir.clone() {
+                    body = body.child(
+                        Button::new("images-reveal-output")
+                            .small()
+                            .ghost()
+                            .label("Show in folder")
+                            .on_click(cx.listener(move |_, _, _, cx| cx.reveal_path(&dir))),
+                    );
                 }
             }
         }
-
-        let format_card = card(cx)
-            .child(field_label("Output format", cx))
-            .child(formats)
-            .child(note(
-                if self.mode == Mode::Edit {
-                    "Edited images are always written without location and camera metadata."
-                } else {
-                    "Choose the format used for the exported files."
-                },
-                cx,
-            ));
 
         let metadata = self.metadata_panel(cx);
 
@@ -1021,7 +1101,6 @@ impl Render for ImagesView {
         if let Some(preview) = preview {
             root = root.child(preview);
         }
-        root = root.child(format_card);
         if let Some(metadata) = metadata {
             root = root.child(metadata);
         }
@@ -1030,43 +1109,6 @@ impl Render for ImagesView {
             cx,
         ))
         .into_any_element()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Crop, normalized};
-    use gpui_kit::{Bounds, point, px, size};
-
-    #[test]
-    fn dragging_in_either_direction_marks_the_same_crop() {
-        let a = Crop::from_points(0.2, 0.3, 0.8, 0.9);
-        let b = Crop::from_points(0.8, 0.9, 0.2, 0.3);
-        assert_eq!((a.x, a.y, a.w, a.h), (b.x, b.y, b.w, b.h));
-    }
-
-    #[test]
-    fn preset_crops_are_centered() {
-        let square = Crop::centered(1.0);
-        assert!((square.x - square.y).abs() < 1e-12);
-        assert!((square.w - square.h).abs() < 1e-12);
-        let wide = Crop::centered(16.0 / 9.0);
-        assert!(wide.w > wide.h);
-        assert!(wide.x < wide.y);
-    }
-
-    #[test]
-    fn preview_coordinates_normalize_against_scrolled_bounds() {
-        let small = normalized(
-            point(px(150.), px(160.)),
-            Bounds::new(point(px(50.), px(-40.)), size(px(200.), px(400.))),
-        );
-        let large = normalized(
-            point(px(300.), px(410.)),
-            Bounds::new(point(px(100.), px(10.)), size(px(400.), px(800.))),
-        );
-        assert_eq!(small, large);
-        assert_eq!(small, point(0.5, 0.5));
     }
 }
 
@@ -1259,5 +1301,42 @@ impl ImagesView {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Crop, normalized};
+    use gpui_kit::{Bounds, point, px, size};
+
+    #[test]
+    fn dragging_in_either_direction_marks_the_same_crop() {
+        let a = Crop::from_points(0.2, 0.3, 0.8, 0.9);
+        let b = Crop::from_points(0.8, 0.9, 0.2, 0.3);
+        assert_eq!((a.x, a.y, a.w, a.h), (b.x, b.y, b.w, b.h));
+    }
+
+    #[test]
+    fn preset_crops_are_centered() {
+        let square = Crop::centered(1.0);
+        assert!((square.x - square.y).abs() < 1e-12);
+        assert!((square.w - square.h).abs() < 1e-12);
+        let wide = Crop::centered(16.0 / 9.0);
+        assert!(wide.w > wide.h);
+        assert!(wide.x < wide.y);
+    }
+
+    #[test]
+    fn preview_coordinates_normalize_against_scrolled_bounds() {
+        let small = normalized(
+            point(px(150.), px(160.)),
+            Bounds::new(point(px(50.), px(-40.)), size(px(200.), px(400.))),
+        );
+        let large = normalized(
+            point(px(300.), px(410.)),
+            Bounds::new(point(px(100.), px(10.)), size(px(400.), px(800.))),
+        );
+        assert_eq!(small, large);
+        assert_eq!(small, point(0.5, 0.5));
     }
 }

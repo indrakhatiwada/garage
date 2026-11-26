@@ -237,7 +237,7 @@ def _ghostscript(src: str, dst: str, level: str = "ebook") -> str | None:
 
 def compress(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(os.path.dirname(src), _stem(src) + ".min.pdf"))
+    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".min.pdf"))
     dpi = int(args.get("dpi", 150) or 150)
     quality = int(args.get("quality", 78) or 78)
     grayscale = bool(args.get("grayscale", False))
@@ -312,6 +312,11 @@ def _stem(path: str) -> str:
     return os.path.splitext(os.path.basename(path))[0]
 
 
+def _out_dir(args: dict[str, Any], src: str) -> str:
+    """Where derived files go: the caller's chosen folder when supplied."""
+    return str(args.get("out_dir") or os.path.dirname(src))
+
+
 # -------------------------------------------------------------------- page edits
 
 
@@ -322,7 +327,7 @@ def pages(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     is keyed by the *original* 1-based page number.
     """
     src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(os.path.dirname(src), _stem(src) + ".edited.pdf"))
+    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".edited.pdf"))
     doc = _open(src, args.get("password"))
     count = doc.page_count
 
@@ -403,7 +408,7 @@ def split(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
 
 def extract(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(os.path.dirname(src), _stem(src) + ".pages.pdf"))
+    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".pages.pdf"))
     pages_list = [int(p) for p in (args.get("pages") or [])]
     if not pages_list:
         raise ValueError("no pages selected")
@@ -517,7 +522,7 @@ def redact(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     nothing recoverable survives underneath.
     """
     src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(os.path.dirname(src), _stem(src) + ".redacted.pdf"))
+    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".redacted.pdf"))
     boxes = args.get("boxes") or []
     if not boxes:
         raise ValueError("no redaction boxes")
@@ -586,7 +591,7 @@ def _fade(color: tuple[float, ...], opacity: float) -> tuple[float, ...]:
 
 def stamp(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(os.path.dirname(src), _stem(src) + ".stamped.pdf"))
+    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".stamped.pdf"))
     text = str(args.get("text") or "")
     mode = str(args.get("mode") or "text")
     position = str(args.get("position") or ("bottom-center" if mode == "numbers" else "center"))
@@ -640,7 +645,7 @@ def stamp(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
 
 def protect(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(os.path.dirname(src), _stem(src) + ".locked.pdf"))
+    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".locked.pdf"))
     user_pw = str(args.get("password") or "")
     if len(user_pw) < 4:
         raise ValueError("password must be at least 4 characters")
@@ -661,7 +666,7 @@ def protect(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
 
 def unlock(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(os.path.dirname(src), _stem(src) + ".unlocked.pdf"))
+    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".unlocked.pdf"))
     doc = _open(src, args.get("password"))
     doc.save(dst, encryption=pymupdf.PDF_ENCRYPT_NONE, garbage=4, deflate=True)
     doc.close()

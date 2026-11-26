@@ -60,6 +60,7 @@ pub struct GarageApp {
     error: Option<String>,
     jobs: Entity<Jobs>,
     views: Option<Views>,
+    output_dir: Option<PathBuf>,
     _events: Option<Task<()>>,
 }
 
@@ -88,14 +89,22 @@ impl GarageApp {
             Err(message) => (None, Some(message), None),
         };
 
+        let output_dir: Option<PathBuf> = None;
         let views = engine.as_ref().map(|engine| Views {
-            images: cx.new(|cx| ImagesView::new(engine.clone(), jobs.clone(), window, cx)),
-            pdf: cx.new(|cx| PdfView::new(engine.clone(), jobs.clone(), cx)),
-            pages: cx.new(|cx| PagesView::new(engine.clone(), jobs.clone(), window, cx)),
+            images: cx.new(|cx| {
+                ImagesView::new(engine.clone(), jobs.clone(), window, cx, output_dir.clone())
+            }),
+            pdf: cx.new(|cx| PdfView::new(engine.clone(), jobs.clone(), cx, output_dir.clone())),
+            pages: cx.new(|cx| {
+                PagesView::new(engine.clone(), jobs.clone(), window, cx, output_dir.clone())
+            }),
             dates: cx.new(|cx| DatesView::new(window, cx)),
-            ocr: cx.new(|cx| OcrView::new(engine.clone(), jobs.clone(), cx)),
-            redact: cx.new(|cx| RedactView::new(engine.clone(), jobs.clone(), window, cx)),
-            cleanup: cx.new(|cx| CleanupView::new(engine.clone(), jobs.clone(), cx)),
+            ocr: cx.new(|cx| OcrView::new(engine.clone(), jobs.clone(), cx, output_dir.clone())),
+            redact: cx.new(|cx| {
+                RedactView::new(engine.clone(), jobs.clone(), window, cx, output_dir.clone())
+            }),
+            cleanup: cx
+                .new(|cx| CleanupView::new(engine.clone(), jobs.clone(), cx, output_dir.clone())),
         });
 
         Self {
@@ -104,8 +113,49 @@ impl GarageApp {
             error,
             jobs,
             views,
+            output_dir,
             _events: events,
         }
+    }
+
+    fn choose_output_dir(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose output folder".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = receiver.await
+                && let Some(path) = paths.pop()
+            {
+                let _ = this.update(cx, |this, cx| {
+                    this.output_dir = Some(path.clone());
+                    if let Some(views) = &this.views {
+                        views
+                            .images
+                            .update(cx, |view, cx| view.set_output_dir(Some(path.clone()), cx));
+                        views
+                            .pdf
+                            .update(cx, |view, cx| view.set_output_dir(Some(path.clone()), cx));
+                        views
+                            .pages
+                            .update(cx, |view, cx| view.set_output_dir(Some(path.clone()), cx));
+                        views
+                            .ocr
+                            .update(cx, |view, cx| view.set_output_dir(Some(path.clone()), cx));
+                        views
+                            .redact
+                            .update(cx, |view, cx| view.set_output_dir(Some(path.clone()), cx));
+                        views
+                            .cleanup
+                            .update(cx, |view, cx| view.set_output_dir(Some(path), cx));
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn accept(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
@@ -199,6 +249,51 @@ impl GarageApp {
             );
             nav = nav.child(button);
         }
+
+        let output_label = self
+            .output_dir
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Choose output folder".to_string());
+        nav = nav.child(
+            div()
+                .mt_auto()
+                .pt_3()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .child(
+                    Button::new("output-folder-pick")
+                        .ghost()
+                        .w_full()
+                        .tooltip(output_label.clone())
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.choose_output_dir(window, cx)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .w_full()
+                                .when(compact, |el| el.flex_col())
+                                .child(
+                                    Icon::new(IconName::FolderOpen)
+                                        .size(px(18.))
+                                        .flex_shrink_0(),
+                                )
+                                .when(!compact, |el| {
+                                    el.child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(output_label),
+                                    )
+                                }),
+                        ),
+                ),
+        );
 
         div()
             .flex()
@@ -511,16 +606,13 @@ impl Render for GarageApp {
                                     .child(Icon::new(IconName::FolderOpen).size(px(16.)))
                                     .when(!compact, |el| el.label("Output folder"))
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        if let Some(views) = &this.views {
-                                            let path =
-                                                views.pdf.read(cx).output_dir().or_else(|| {
-                                                    std::env::var_os("HOME")
-                                                        .map(PathBuf::from)
-                                                        .map(|home| home.join("Documents"))
-                                                });
-                                            if let Some(path) = path {
-                                                cx.reveal_path(&path);
-                                            }
+                                        let path = this.output_dir.clone().or_else(|| {
+                                            std::env::var_os("HOME")
+                                                .map(PathBuf::from)
+                                                .map(|home| home.join("Documents"))
+                                        });
+                                        if let Some(path) = path {
+                                            cx.reveal_path(&path);
                                         }
                                     })),
                             ),

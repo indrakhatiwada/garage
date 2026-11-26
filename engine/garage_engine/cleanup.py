@@ -67,7 +67,9 @@ def _autocrop(im: Image.Image, margin: int = 12) -> Image.Image:
 def enhance(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     """Turn a phone photo of a document into something that looks scanned."""
     src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(os.path.dirname(src), _stem(src) + ".clean.png"))
+    dst = str(args.get("dst") or os.path.join(
+        str(args.get("out_dir") or os.path.dirname(src)), _stem(src) + ".clean.png"
+    ))
     deskew = bool(args.get("deskew", True))
     denoise = bool(args.get("denoise", True))
     threshold = bool(args.get("threshold", True))
