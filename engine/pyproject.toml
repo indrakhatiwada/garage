@@ -1,6 +1,6 @@
 [project]
 name = "garage-engine"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local document engine for Garage. Never opens a socket."
 requires-python = ">=3.11"
 dependencies = [
