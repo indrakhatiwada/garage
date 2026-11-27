@@ -47,7 +47,10 @@ def features() -> dict[str, bool]:
 
 
 def build_ops() -> Ops:
+    from . import pdf_tools
     ops = Ops()
+    ops.register("pdf.workspace", pdf_tools.execute)
+    ops.register("pdf.inspect", pdf_tools.inspect)
     ops.register("ping", lambda ctx, a: {"version": VERSION, "features": features(), "pid": os.getpid()})
 
     # --- images -------------------------------------------------------

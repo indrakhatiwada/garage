@@ -203,6 +203,7 @@ pub struct ImagesView {
     selected: usize,
     // Edit state
     crop: Option<Crop>,
+    crop_ratio: &'static str,
     crop_start: Option<(f64, f64)>,
     rotate: u32,
     flip_h: bool,
@@ -234,6 +235,8 @@ pub struct ImagesView {
     job: Option<String>,
     info_job: Option<String>,
     info: Option<Value>,
+    choices: super::ChoiceStore,
+    choice_events: Vec<Subscription>,
     _observe: Subscription,
 }
 
@@ -327,6 +330,8 @@ impl ImagesView {
             }),
         ];
         Self {
+            choices: super::ChoiceStore::new(),
+            choice_events: vec![],
             engine,
             jobs,
             files: Vec::new(),
@@ -341,6 +346,7 @@ impl ImagesView {
             target_select,
             selected: 0,
             crop: None,
+            crop_ratio: "free",
             crop_start: None,
             rotate: 0,
             flip_h: false,
@@ -454,15 +460,12 @@ impl ImagesView {
         if self.files.is_empty() {
             return;
         }
-        let Some(out_dir) = self.output_dir.clone() else {
-            return;
-        };
         let mut args = json!({
             "paths": self.files.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
             "preset": self.preset.key(),
             "format": self.format.key(),
             "strip_exif": self.strip_exif,
-            "out_dir": out_dir.to_string_lossy().to_string(),
+            "out_dir": self.output_dir.as_ref().map(|p|p.to_string_lossy().to_string()),
         });
         if self.preset == Preset::Target {
             args["target_bytes"] = json!(self.target_kb * 1024);
@@ -470,7 +473,7 @@ impl ImagesView {
         }
         let id = self.engine.call("image.compress", args);
         self.jobs.update(cx, |jobs, _| {
-            jobs.start(id.clone(), Tool::Images, "queued");
+            jobs.start_export(id.clone(), Tool::Images, "queued");
         });
         self.job = Some(id);
         cx.notify();
@@ -478,6 +481,7 @@ impl ImagesView {
 
     fn reset_edits(&mut self) {
         self.crop = None;
+        self.crop_ratio = "free";
         self.crop_start = None;
         self.rotate = 0;
         self.flip_h = false;
@@ -611,18 +615,23 @@ impl Render for ImagesView {
         } else {
             None
         };
+        for (state, label) in [
+            (&self.preset_select, self.preset.label()),
+            (&self.format_select, self.format.label()),
+        ] {
+            if state.read(cx).selected_value().map(String::as_str) != Some(label) {
+                state.update(cx, |s, cx| {
+                    s.set_selected_value(&label.to_string(), window, cx)
+                });
+            }
+        }
         let total_before = self.total_before();
         let count = self.files.len();
 
-        let mut modes = div().flex().flex_wrap().gap_2().items_center();
+        let mut modes = super::segmented(cx).flex_wrap();
         for mode in [Mode::Compress, Mode::Edit] {
             let selected = self.mode == mode;
-            let button = Button::new(mode.id()).label(mode.label()).small();
-            let button = if selected {
-                button.primary()
-            } else {
-                button.ghost()
-            };
+            let button = super::segment(mode.id(), mode.label(), selected);
             modes = modes.child(button.on_click(cx.listener(move |this, _, _, cx| {
                 this.mode = mode;
                 this.job = None;
@@ -647,31 +656,48 @@ impl Render for ImagesView {
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .gap_2()
                     .child(field_label("Preset", cx))
-                    .child(Select::new(&self.preset_select).w(px(190.))),
+                    .child(
+                        Select::new(&self.preset_select)
+                            .w(px(210.))
+                            .h(px(36.))
+                            .disabled(busy),
+                    ),
             )
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .gap_2()
                     .child(field_label("Format", cx))
-                    .child(Select::new(&self.format_select).w(px(140.))),
+                    .child(
+                        Select::new(&self.format_select)
+                            .w(px(160.))
+                            .h(px(36.))
+                            .disabled(busy),
+                    ),
             )
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .gap_2()
                     .child(field_label("Target size", cx))
-                    .child(Select::new(&self.target_select).w(px(140.))),
+                    .child(
+                        Select::new(&self.target_select)
+                            .w(px(160.))
+                            .disabled(self.preset != Preset::Target || busy),
+                    ),
             );
         let output_note = self
             .output_dir
             .as_ref()
             .map(|path| format!("Saving to {}", path.display()))
-            .unwrap_or_else(|| "Choose an output folder in the sidebar first".to_string());
+            .unwrap_or_else(|| {
+                "Saves new copies beside the originals. Choose an output folder to change this."
+                    .to_string()
+            });
 
         let mut file_list = div()
             .id("image-files")
@@ -962,36 +988,34 @@ impl Render for ImagesView {
                 .child(note(output_note, cx));
 
             body = body
+                .child(super::setting_row(
+                    "Remove private metadata",
+                    "Strip location, camera details, and EXIF data from exported copies.",
+                    Switch::new("strip-exif")
+                        .checked(self.strip_exif)
+                        .disabled(busy)
+                        .on_click(cx.listener(|t, _, _, cx| {
+                            t.strip_exif = !t.strip_exif;
+                            cx.notify();
+                        })),
+                    cx,
+                ))
                 .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_3()
-                        .justify_between()
-                        .items_center()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .gap_2()
-                                .items_center()
-                                .child(muted("Strip location and camera metadata", cx))
-                                .child(
-                                    Switch::new("strip-exif").checked(self.strip_exif).on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.strip_exif = !this.strip_exif;
-                                            cx.notify();
-                                        }),
-                                    ),
-                                ),
-                        )
-                        .child(
-                            Button::new("image-run")
-                                .label(if busy { "Compressing…" } else { "Compress" })
-                                .primary()
-                                .disabled(busy || count == 0 || self.output_dir.is_none())
-                                .on_click(cx.listener(|this, _, _, cx| this.run(cx))),
-                        ),
+                    div().flex().justify_end().pt_2().child(
+                        Button::new("image-run")
+                            .label(if busy { "Compressing…" } else { "Compress" })
+                            .primary()
+                            .h(px(38.))
+                            .disabled(busy || count == 0)
+                            .tooltip(if count == 0 {
+                                "Add at least one image to compress"
+                            } else if busy {
+                                "Compression is running"
+                            } else {
+                                "Save compressed copies"
+                            })
+                            .on_click(cx.listener(|t, _, _, cx| t.run(cx))),
+                    ),
                 )
                 .child(job_progress(job.as_ref(), cx));
 
@@ -1076,13 +1100,24 @@ impl Render for ImagesView {
                         ),
                 );
                 body = body.child(success_box("Done. Originals were not modified.", cx));
-                if let Some(dir) = self.output_dir.clone() {
+                let folders = super::output_folders(&result);
+                let multiple = folders.len() > 1;
+                for (index, dir) in folders.into_iter().enumerate() {
+                    let label = if multiple {
+                        format!(
+                            "Show in {}",
+                            dir.file_name().unwrap_or_default().to_string_lossy()
+                        )
+                    } else {
+                        "Show in folder".into()
+                    };
                     body = body.child(
-                        Button::new("images-reveal-output")
+                        Button::new(SharedString::from(format!("images-reveal-output-{index}")))
                             .small()
                             .ghost()
-                            .label("Show in folder")
-                            .on_click(cx.listener(move |_, _, _, cx| cx.reveal_path(&dir))),
+                            .label(label)
+                            .tooltip(dir.to_string_lossy().to_string())
+                            .on_click(cx.listener(move |_, _, _, cx| cx.open_with_system(&dir))),
                     );
                 }
             }

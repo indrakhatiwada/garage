@@ -168,7 +168,7 @@ impl CleanupView {
         self.show_cleaned = true;
         let id = self.engine.call("cleanup.enhance", args);
         self.jobs.update(cx, |jobs, _| {
-            jobs.start(id.clone(), Tool::Cleanup, "Saving cleaned copy…");
+            jobs.start_export(id.clone(), Tool::Cleanup, "Saving cleaned copy…");
         });
         self.job = Some(id);
         cx.notify();
@@ -279,35 +279,24 @@ impl Render for CleanupView {
             );
         }
 
-        body = body.child(field_label("Steps", cx))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_6()
-                    .items_center()
-                    .child(self.toggle("Deskew", ToggleKind::Deskew, cx))
-                    .child(self.toggle("Denoise", ToggleKind::Denoise, cx))
-                    .child(self.toggle("Threshold", ToggleKind::Threshold, cx))
-                    .child(self.toggle("Autocrop", ToggleKind::Autocrop, cx)),
-            )
-            .child(note(
-                "Deskew rotates by the detected angle, denoise removes speckles, threshold turns the page black and white, autocrop trims empty margins.",
-                cx,
-            ));
+        body = body.child(field_label("Steps", cx)).child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(self.toggle("Deskew", ToggleKind::Deskew, cx))
+                .child(self.toggle("Denoise", ToggleKind::Denoise, cx))
+                .child(self.toggle("Threshold", ToggleKind::Threshold, cx))
+                .child(self.toggle("Autocrop", ToggleKind::Autocrop, cx)),
+        );
 
         if self.path.is_some() {
-            let mut comparison = div().flex().flex_wrap().gap_2().items_center();
+            let mut comparison = super::segmented(cx).flex_wrap();
             for (id, label, show_cleaned) in [
                 ("cleanup-original", "Original", false),
                 ("cleanup-preview", "Cleaned preview", true),
             ] {
-                let button = Button::new(id).label(label).small();
-                let button = if self.show_cleaned == show_cleaned {
-                    button.primary()
-                } else {
-                    button.ghost()
-                };
+                let button = super::segment(id, label, self.show_cleaned == show_cleaned);
                 comparison =
                     comparison.child(button.on_click(cx.listener(move |this, _, _, cx| {
                         this.show_cleaned = show_cleaned;
@@ -470,32 +459,31 @@ impl CleanupView {
             ToggleKind::Threshold => self.threshold,
             ToggleKind::Autocrop => self.autocrop,
         };
-        div()
-            .flex()
-            .flex_wrap()
-            .gap_2()
-            .items_center()
-            .child(muted(label, cx))
-            .child(
-                Switch::new(label)
-                    .checked(checked)
-                    .disabled(
-                        self.jobs
-                            .read(cx)
-                            .get(&self.job)
-                            .is_some_and(Job::is_running),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        match kind {
-                            ToggleKind::Deskew => this.deskew = !this.deskew,
-                            ToggleKind::Denoise => this.denoise = !this.denoise,
-                            ToggleKind::Threshold => this.threshold = !this.threshold,
-                            ToggleKind::Autocrop => this.autocrop = !this.autocrop,
-                        }
-                        this.show_cleaned = true;
-                        this.refresh_preview(cx);
-                        cx.notify();
-                    })),
+        let description = match kind {
+            ToggleKind::Deskew => "Straighten tilted text and page edges.",
+            ToggleKind::Denoise => "Remove speckles from scanned pages.",
+            ToggleKind::Threshold => "Convert to black and white. Turn off for signatures.",
+            ToggleKind::Autocrop => "Trim empty margins around the document.",
+        };
+        let control = Switch::new(label)
+            .checked(checked)
+            .disabled(
+                self.jobs
+                    .read(cx)
+                    .get(&self.job)
+                    .is_some_and(Job::is_running),
             )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                match kind {
+                    ToggleKind::Deskew => this.deskew = !this.deskew,
+                    ToggleKind::Denoise => this.denoise = !this.denoise,
+                    ToggleKind::Threshold => this.threshold = !this.threshold,
+                    ToggleKind::Autocrop => this.autocrop = !this.autocrop,
+                }
+                this.show_cleaned = true;
+                this.refresh_preview(cx);
+                cx.notify();
+            }));
+        super::setting_row(label, description, control, cx)
     }
 }

@@ -186,6 +186,9 @@ impl ImagesView {
                     this.saving = false;
                     match copied {
                         Ok(()) => {
+                            this.jobs.update(cx, |_, cx| {
+                                cx.emit(crate::success::Success::saved(destination.clone()));
+                            });
                             if this.edit_revision == revision && !this.edit_dirty {
                                 this.saved_path = Some(destination);
                             }
@@ -345,7 +348,6 @@ impl ImagesView {
                     "JPEG, PNG, WebP, AVIF, HEIC and TIFF · files stay on this device",
                     cx,
                 )
-                .min_h(px(320.))
                 .on_click(cx.listener(|this, _, window, cx| this.pick(window, cx))),
             );
         }
@@ -358,7 +360,7 @@ impl ImagesView {
             .child(tool("editor-flip-h","Flip H","<path d='M12 3v18M3 7v10l5-5zm18 0v10l-5-5z'/>").disabled(locked).when(self.flip_h,|b|b.secondary()).on_click(cx.listener(|this,_,_,cx|{this.flip_h= !this.flip_h;this.queue_editor(cx);})))
             .child(tool("editor-flip-v","Flip V","<path d='M3 12h18M7 3h10l-5 5zm0 18h10l-5-5z'/>").disabled(locked).when(self.flip_v,|b|b.secondary()).on_click(cx.listener(|this,_,_,cx|{this.flip_v= !this.flip_v;this.queue_editor(cx);})))
             .child(tool("editor-resize","Resize","<rect x='3' y='3' width='18' height='18' rx='2'/><path d='m8 16 8-8m-5 0h5v5'/>").disabled(locked).when(self.resize_open,|b|b.secondary()).on_click(cx.listener(|this,_,_,cx|{this.resize_open= !this.resize_open;cx.notify();})))
-            .child(tool("editor-bw","B&W","<circle cx='12' cy='12' r='9'/><path d='M12 3v18'/> <path d='M12 3a9 9 0 0 1 0 18z' fill='currentColor'/>").disabled(locked).when(self.grayscale,|b|b.secondary()).on_click(cx.listener(|this,_,_,cx|{this.grayscale= !this.grayscale;this.queue_editor(cx);})))
+            .child(div().flex().items_center().gap_2().px_3().child(note("Black & white",cx)).child(Switch::new("editor-bw").checked(self.grayscale).disabled(locked).on_click(cx.listener(|this,_,_,cx|{this.grayscale=!this.grayscale;this.queue_editor(cx);}))))
             .child(div().flex_1())
             .child(Button::new("editor-reset").label("Reset").small().ghost().on_click(cx.listener(|this,_,_,cx|{this.reset_edits();this.queue_editor(cx);})))
             .child(Button::new("editor-original").label(if self.show_original{"Show edited"}else{"Original"}).small().ghost().disabled(self.crop_open||original.is_none()).on_click(cx.listener(|this,_,_,cx|{this.show_original= !this.show_original;cx.notify();})));
@@ -370,24 +372,43 @@ impl ImagesView {
                 .gap_2()
                 .items_center()
                 .child(note("Drag on the image, or choose a ratio:", cx));
-            for (id, label, ratio) in [
-                ("editor-crop-free", "Free", 0.),
-                ("editor-crop-square", "1:1", 1.),
-                ("editor-crop-4x3", "4:3", 4. / 3.),
-                ("editor-crop-wide", "16:9", 16. / 9.),
-            ] {
-                crops = crops.child(Button::new(id).label(label).small().ghost().on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.crop_draft = if ratio == 0. {
-                            None
-                        } else {
-                            let (w, h) = this.preview_dims.unwrap_or((1, 1));
-                            Some(Crop::centered(ratio / (w as f64 / h as f64)))
-                        };
-                        cx.notify();
-                    }),
-                ));
-            }
+            let ratio = super::super::choice(
+                &mut self.choices,
+                &mut self.choice_events,
+                "crop-ratio",
+                vec![
+                    ("free", "Freeform"),
+                    ("square", "Square · 1:1"),
+                    ("photo", "Photo · 4:3"),
+                    ("wide", "Widescreen · 16:9"),
+                ],
+                self.crop_ratio,
+                busy,
+                window,
+                cx,
+                |t, value, _, cx| {
+                    let ratio = match value {
+                        "square" => 1.,
+                        "photo" => 4. / 3.,
+                        "wide" => 16. / 9.,
+                        _ => 0.,
+                    };
+                    t.crop_ratio = match value {
+                        "square" => "square",
+                        "photo" => "photo",
+                        "wide" => "wide",
+                        _ => "free",
+                    };
+                    t.crop_draft = if ratio == 0. {
+                        None
+                    } else {
+                        let (w, h) = t.preview_dims.unwrap_or((1, 1));
+                        Some(Crop::centered(ratio / (w as f64 / h as f64)))
+                    };
+                    cx.notify();
+                },
+            );
+            crops = crops.child(div().w(px(220.)).child(ratio));
             root = root.child(
                 crops
                     .child(div().flex_1())
@@ -420,10 +441,23 @@ impl ImagesView {
                     .flex_wrap()
                     .gap_3()
                     .items_center()
-                    .child(field_label("Width", cx))
-                    .child(Input::new(&self.resize_w).w(px(110.)))
-                    .child(field_label("Height", cx))
-                    .child(Input::new(&self.resize_h).w(px(110.)))
+                    .items_end()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(field_label("Width (px)", cx))
+                            .child(Input::new(&self.resize_w).w(px(130.)).h(px(36.))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(field_label("Height (px)", cx))
+                            .child(Input::new(&self.resize_h).w(px(130.)).h(px(36.))),
+                    )
                     .child(note(
                         "Pixels · leave one blank to keep the aspect ratio",
                         cx,

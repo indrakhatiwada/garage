@@ -1,9 +1,9 @@
 use chrono::{Datelike, Local, NaiveDate};
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable};
+use gpui_kit::component::{Icon, switch::Switch};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -415,18 +415,19 @@ impl Render for DatesView {
                             })),
                     )
                     .child(
-                        Button::new("nepali-digits")
-                            .label(if self.nepali_digits {
-                                "Devanagari ०१२"
-                            } else {
-                                "Latin 012"
-                            })
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.nepali_digits = !this.nepali_digits;
-                                cx.notify();
-                            })),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(note("Nepali digits", cx))
+                            .child(
+                                Switch::new("nepali-digits")
+                                    .checked(self.nepali_digits)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.nepali_digits = !this.nepali_digits;
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             );
 

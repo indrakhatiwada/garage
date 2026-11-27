@@ -7,6 +7,7 @@ pub mod images;
 pub mod ocr;
 pub mod pages;
 pub mod pdf;
+pub mod pdf_workspace;
 pub mod redact;
 
 use std::path::PathBuf;
@@ -20,6 +21,138 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::jobs::{Job, Jobs};
+
+pub fn setting_row(title: &str, description: &str, control: impl IntoElement, cx: &App) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_4()
+        .w_full()
+        .py_3()
+        .border_b_1()
+        .border_color(cx.theme().border.opacity(0.65))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(title.to_string()),
+                )
+                .child(note(description, cx)),
+        )
+        .child(div().flex_shrink_0().child(control))
+}
+
+pub type ChoiceStore = std::collections::HashMap<
+    &'static str,
+    Entity<
+        gpui_kit::component::select::SelectState<
+            gpui_kit::component::searchable_list::SearchableVec<String>,
+        >,
+    >,
+>;
+
+/// Native select fields share sizing, spacing, and keyboard behavior across tools.
+pub fn choice<T: 'static>(
+    store: &mut ChoiceStore,
+    events: &mut Vec<Subscription>,
+    key: &'static str,
+    options: Vec<(&'static str, &'static str)>,
+    selected: &str,
+    disabled: bool,
+    window: &mut Window,
+    cx: &mut Context<T>,
+    changed: impl Fn(&mut T, &str, &mut Window, &mut Context<T>) + 'static,
+) -> gpui_kit::component::select::Select<gpui_kit::component::searchable_list::SearchableVec<String>>
+{
+    use gpui_kit::component::{
+        IndexPath,
+        searchable_list::SearchableVec,
+        select::{Select, SelectEvent, SelectState},
+    };
+    if !store.contains_key(key) {
+        let index = options
+            .iter()
+            .position(|(value, _)| *value == selected)
+            .unwrap_or(0);
+        let state = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    options
+                        .iter()
+                        .map(|(_, label)| label.to_string())
+                        .collect::<Vec<_>>(),
+                ),
+                Some(IndexPath::new(index)),
+                window,
+                cx,
+            )
+        });
+        let choices = options.clone();
+        events.push(
+            cx.subscribe_in(&state, window, move |this, _, event, window, cx| {
+                if let SelectEvent::Confirm(Some(label)) = event {
+                    if let Some((value, _)) =
+                        choices.iter().find(|(_, name)| *name == label.as_str())
+                    {
+                        changed(this, value, window, cx);
+                    }
+                }
+            }),
+        );
+        store.insert(key, state);
+    }
+    let state = &store[key];
+    if let Some((_, label)) = options.iter().find(|(value, _)| *value == selected) {
+        if state.read(cx).selected_value().map(String::as_str) != Some(*label) {
+            state.update(cx, |state, cx| {
+                state.set_selected_value(&label.to_string(), window, cx)
+            });
+        }
+    }
+    Select::new(state).w_full().h(px(36.)).disabled(disabled)
+}
+
+/// A shared, keyboard-accessible segmented field for settings inside tool pages.
+pub fn segmented(cx: &App) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .p_1()
+        .self_start()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(cx.theme().border.opacity(0.7))
+        .bg(cx.theme().muted.opacity(0.6))
+}
+
+pub fn segment(id: impl Into<ElementId>, label: impl Into<SharedString>, selected: bool) -> Button {
+    let button = Button::new(id)
+        .label(label)
+        .h(px(32.))
+        .min_w(px(48.))
+        .px_3()
+        .rounded(px(6.))
+        .text_sm()
+        .font_weight(if selected {
+            FontWeight::SEMIBOLD
+        } else {
+            FontWeight::MEDIUM
+        });
+    if selected {
+        button.primary()
+    } else {
+        button.ghost()
+    }
+}
 
 /// The empty state used by every file-based tool. Files can be dropped on any
 /// part of the window; this is the visual affordance for that.
@@ -41,7 +174,7 @@ pub fn dropzone(title: &str, subtitle: &str, cx: &App) -> Stateful<Div> {
         .gap_2()
         .px_4()
         .py_8()
-        .min_h(px(190.))
+        .min_h(px(240.))
         .w_full()
         .min_w_0()
         .flex_shrink_0()
@@ -89,6 +222,19 @@ pub fn dropzone(title: &str, subtitle: &str, cx: &App) -> Stateful<Div> {
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(subtitle.to_string()),
+        )
+        .child(
+            div()
+                .mt_3()
+                .px_4()
+                .py_2()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().popover)
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .child("Click to browse files"),
         )
 }
 
@@ -160,9 +306,13 @@ pub fn save_button_labeled<T: 'static>(
                         }
                         if std::fs::copy(&source_path, &destination).is_ok() {
                             let path = destination.to_string_lossy().to_string();
-                            if let Some(id) = job_id {
-                                jobs.update(cx, |jobs, _| jobs.mark_saved(&id, path));
-                            }
+                            jobs.update(cx, |jobs, cx| {
+                                if let Some(id) = job_id {
+                                    jobs.mark_saved(&id, path);
+                                }
+                                cx.emit(crate::success::Success::saved(destination));
+                                cx.notify();
+                            });
                             let _ = view.update(cx, |_, cx| cx.notify());
                         }
                     }
@@ -425,4 +575,44 @@ pub fn note(text: impl Into<SharedString>, cx: &App) -> Div {
         .text_xs()
         .text_color(cx.theme().muted_foreground)
         .child(text.into())
+}
+
+/// Resolve actual result destinations, independently of the current export preference.
+pub fn output_folders(result: &serde_json::Value) -> Vec<PathBuf> {
+    let mut folders = std::collections::BTreeSet::new();
+    let paths = result
+        .get("files")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| {
+            file.get("dst")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| file.as_str())
+        })
+        .chain(result.get("dst").and_then(serde_json::Value::as_str));
+    for path in paths {
+        let path = PathBuf::from(path);
+        let absolute = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir().unwrap_or_default().join(path)
+        };
+        if let Some(parent) = absolute.parent() {
+            folders.insert(parent.to_path_buf());
+        }
+    }
+    folders.into_iter().collect()
+}
+
+#[cfg(test)]
+mod folder_tests {
+    #[test]
+    fn folders_follow_actual_batch_results_and_keep_distinct_destinations() {
+        let root = std::env::temp_dir();
+        let first = root.join("one folder");
+        let second = root.join("second");
+        let result = serde_json::json!({"files":[{"dst":first.join("a.jpg")},{"dst":first.join("b.jpg")},{"dst":second.join("c.jpg")}]});
+        assert_eq!(super::output_folders(&result), vec![first, second]);
+    }
 }

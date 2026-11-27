@@ -103,6 +103,8 @@ pub struct RedactView {
     preview_job: Option<String>,
     focus: FocusHandle,
     output_dir: Option<PathBuf>,
+    choices: super::ChoiceStore,
+    choice_events: Vec<Subscription>,
     _observe: Subscription,
 }
 
@@ -119,6 +121,8 @@ impl RedactView {
             .unwrap_or_default()
             .as_nanos();
         Self {
+            choices: super::ChoiceStore::new(),
+            choice_events: vec![],
             engine,
             jobs: jobs.clone(),
             path: None,
@@ -425,7 +429,7 @@ impl RedactView {
         };
         let id = self.engine.call(op, args);
         self.jobs.update(cx, |jobs, _| {
-            jobs.start(id.clone(), Tool::Redact, "redacting");
+            jobs.start_export(id.clone(), Tool::Redact, "redacting");
         });
         self.job = Some(id);
         cx.notify();
@@ -807,26 +811,40 @@ impl Render for RedactView {
             if self.is_pdf {
                 body = body.child(note("PDF areas are filled with solid black. Export flattens the PDF and removes its hidden text layer.", cx));
             } else {
-                let mut modes = div().flex().flex_wrap().gap_2().items_center();
-                for mode in [Mode::Pixelate, Mode::Blur, Mode::Solid] {
-                    let button = Button::new(mode.key())
-                        .label(mode.label())
-                        .small()
-                        .disabled(busy);
-                    let button = if self.mode == mode {
-                        button.primary()
-                    } else {
-                        button.ghost()
-                    };
-                    modes = modes.child(button.on_click(cx.listener(move |this, _, _, cx| {
-                        this.mode = mode;
-                        this.show_redacted = true;
-                        this.job = None;
-                        this.refresh_redacted_preview(cx);
+                let modes = super::choice(
+                    &mut self.choices,
+                    &mut self.choice_events,
+                    "redaction-style",
+                    vec![
+                        ("pixelate", "Pixelate"),
+                        ("blur", "Blur"),
+                        ("solid", "Solid black"),
+                    ],
+                    self.mode.key(),
+                    busy,
+                    window,
+                    cx,
+                    |t, value, _, cx| {
+                        t.mode = match value {
+                            "blur" => Mode::Blur,
+                            "solid" => Mode::Solid,
+                            _ => Mode::Pixelate,
+                        };
+                        t.show_redacted = true;
+                        t.job = None;
+                        t.refresh_redacted_preview(cx);
                         cx.notify();
-                    })));
-                }
-                body = body.child(field_label("Redaction style", cx)).child(modes);
+                    },
+                );
+                body = body.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .max_w(px(320.))
+                        .child(field_label("Redaction style", cx))
+                        .child(modes),
+                );
             }
             body = body
                 .child(

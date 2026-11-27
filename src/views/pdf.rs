@@ -73,6 +73,8 @@ pub struct PdfView {
     preview_path: Option<PathBuf>,
     preview_dims: Option<(u32, u32)>,
     output_dir: Option<PathBuf>,
+    choices: super::ChoiceStore,
+    choice_events: Vec<Subscription>,
     _observe: Subscription,
 }
 
@@ -85,6 +87,8 @@ impl PdfView {
     ) -> Self {
         let observe = cx.observe(&jobs, |_, _, cx| cx.notify());
         Self {
+            choices: super::ChoiceStore::new(),
+            choice_events: vec![],
             engine,
             jobs,
             path: None,
@@ -194,7 +198,7 @@ impl PdfView {
             }),
         );
         self.jobs.update(cx, |jobs, _| {
-            jobs.start(id.clone(), Tool::Pdf, "opening");
+            jobs.start_export(id.clone(), Tool::Pdf, "opening");
         });
         self.job = Some(id);
         cx.notify();
@@ -256,21 +260,33 @@ impl Render for PdfView {
             .and_then(Value::as_bool)
             .unwrap_or(false);
 
-        let mut presets = div().flex().flex_wrap().gap_2().items_center();
-        for preset in [Preset::Screen, Preset::Balanced, Preset::Print] {
-            let selected = self.preset == preset;
-            let button = Button::new(preset.id()).label(preset.label()).small();
-            let button = if selected {
-                button.primary()
-            } else {
-                button.secondary()
-            };
-            presets = presets.child(button.on_click(cx.listener(move |this, _, _, cx| {
-                this.preset = preset;
+        let selected = match self.preset {
+            Preset::Screen => "screen",
+            Preset::Balanced => "balanced",
+            Preset::Print => "print",
+        };
+        let presets = super::choice(
+            &mut self.choices,
+            &mut self.choice_events,
+            "preset",
+            vec![
+                ("screen", "Screen · smallest file"),
+                ("balanced", "Balanced · everyday documents"),
+                ("print", "Print · preserve detail"),
+            ],
+            selected,
+            busy,
+            window,
+            cx,
+            |t, value, _, cx| {
+                t.preset = match value {
+                    "screen" => Preset::Screen,
+                    "print" => Preset::Print,
+                    _ => Preset::Balanced,
+                };
                 cx.notify();
-            })));
-        }
-
+            },
+        );
         let mut body = card(cx)
             .child(
                 div()
@@ -348,14 +364,20 @@ impl Render for PdfView {
         }
 
         body = body
-            .child(field_label("Preset", cx))
-            .child(presets)
             .child(
                 div()
                     .flex()
-                    .flex_wrap()
-                    .gap_6()
-                    .items_center()
+                    .flex_col()
+                    .gap_2()
+                    .max_w(px(360.))
+                    .child(field_label("Compression preset", cx))
+                    .child(presets),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
                     .child(toggle("Grayscale", self.grayscale, cx, |this, cx| {
                         this.grayscale = !this.grayscale;
                         cx.notify();
@@ -535,11 +557,17 @@ impl Render for PdfView {
                                         if let Some(dst) = this
                                             .jobs
                                             .read(cx)
-                                            .get(&this.job)
-                                            .and_then(|j| j.result())
-                                            .and_then(|r| r.get("dst"))
-                                            .and_then(Value::as_str)
+                                            .saved_for(&this.job)
                                             .map(str::to_string)
+                                            .or_else(|| {
+                                                this.jobs
+                                                    .read(cx)
+                                                    .get(&this.job)
+                                                    .and_then(|j| j.result())
+                                                    .and_then(|r| r.get("dst"))
+                                                    .and_then(Value::as_str)
+                                                    .map(str::to_string)
+                                            })
                                         {
                                             cx.open_with_system(std::path::Path::new(&dst));
                                         }
@@ -554,15 +582,21 @@ impl Render for PdfView {
                                         if let Some(dst) = this
                                             .jobs
                                             .read(cx)
-                                            .get(&this.job)
-                                            .and_then(|j| j.result())
-                                            .and_then(|r| r.get("dst"))
-                                            .and_then(Value::as_str)
+                                            .saved_for(&this.job)
                                             .map(str::to_string)
+                                            .or_else(|| {
+                                                this.jobs
+                                                    .read(cx)
+                                                    .get(&this.job)
+                                                    .and_then(|j| j.result())
+                                                    .and_then(|r| r.get("dst"))
+                                                    .and_then(Value::as_str)
+                                                    .map(str::to_string)
+                                            })
                                         {
                                             let path = std::path::PathBuf::from(dst);
                                             if let Some(parent) = path.parent() {
-                                                cx.reveal_path(parent);
+                                                cx.open_with_system(parent);
                                             }
                                         }
                                     })),
@@ -695,15 +729,17 @@ fn toggle(
     cx: &mut Context<PdfView>,
     handler: impl Fn(&mut PdfView, &mut Context<PdfView>) + 'static,
 ) -> Div {
-    div()
-        .flex()
-        .flex_wrap()
-        .gap_2()
-        .items_center()
-        .child(muted(label, cx))
-        .child(
-            Switch::new(label)
-                .checked(checked)
-                .on_click(cx.listener(move |this, _, _, cx| handler(this, cx))),
-        )
+    let description = match label {
+        "Grayscale" => "Convert images to black and white.",
+        "Font subsetting" => "Keep only the font characters used in this document.",
+        _ => "Apply an additional local compression pass when available.",
+    };
+    super::setting_row(
+        label,
+        description,
+        Switch::new(label)
+            .checked(checked)
+            .on_click(cx.listener(move |this, _, _, cx| handler(this, cx))),
+        cx,
+    )
 }
