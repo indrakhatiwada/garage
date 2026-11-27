@@ -4,7 +4,7 @@
 //! a reader thread that turns replies into events. No sockets are opened.
 
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -92,7 +92,7 @@ pub struct Engine(Arc<Inner>);
 
 impl Engine {
     pub fn spawn() -> Result<Self, String> {
-        let mut command = resolve_command();
+        let mut command = resolve_command()?;
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
@@ -251,27 +251,31 @@ fn parse_event(line: &str) -> Option<Event> {
     }
 }
 
-/// Release build: a sibling `garage-engine` binary.
+/// Find the frozen sidecar shipped beside the app. PyInstaller onedir puts the
+/// executable inside a `garage-engine` directory; older one-file bundles (and
+/// the Linux install) put it directly next to the app as a sibling.
+fn bundled_engine(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.with_file_name("garage-engine");
+    [
+        dir.join("garage-engine.exe"),
+        dir.join("garage-engine"),
+        exe.with_file_name("garage-engine.exe"),
+        exe.with_file_name("garage-engine"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+}
+
+/// Release build: a bundled sidecar beside the executable.
 /// Development: the project venv, so Python edits apply instantly.
-fn resolve_command() -> Command {
+fn resolve_command() -> Result<Command, String> {
     if let Ok(path) = std::env::var("GARAGE_ENGINE") {
-        return Command::new(path);
+        return Ok(Command::new(path));
     }
-    if let Ok(exe) = std::env::current_exe() {
-        let name = if cfg!(target_os = "windows") {
-            "garage-engine.exe"
-        } else {
-            "garage-engine"
-        };
-        let sibling = exe.with_file_name(name);
-        if sibling.is_dir() {
-            let binary = sibling.join(name);
-            if binary.is_file() {
-                return Command::new(binary);
-            }
-        } else if sibling.is_file() {
-            return Command::new(sibling);
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(binary) = bundled_engine(&exe)
+    {
+        return Ok(Command::new(binary));
     }
     let root = project_root();
     let venv = root.join(if cfg!(target_os = "windows") {
@@ -284,15 +288,91 @@ fn resolve_command() -> Command {
         command
             .arg(root.join("engine/run.py"))
             .env("PYTHONPATH", root.join("engine"));
-        return command;
+        return Ok(command);
     }
-    let mut command = Command::new("uv");
-    command
-        .args(["run", "--project", "engine", "python", "engine/run.py"])
-        .current_dir(&root);
-    command
+    if root.join("engine/run.py").is_file() {
+        let mut command = Command::new("uv");
+        command
+            .args(["run", "--project", "engine", "python", "engine/run.py"])
+            .current_dir(&root);
+        return Ok(command);
+    }
+    let exe = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "the app executable".to_string());
+    Err(format!(
+        "could not find the bundled engine next to {exe}; keep the garage-engine folder beside the app, or set GARAGE_ENGINE to the engine executable"
+    ))
 }
 
 fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    struct Fixture {
+        dir: PathBuf,
+    }
+
+    impl Fixture {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("garage-engine-test-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Self { dir }
+        }
+
+        fn exe(&self) -> PathBuf {
+            let exe = self.dir.join(if cfg!(target_os = "windows") {
+                "Garage.exe"
+            } else {
+                "garage"
+            });
+            fs::write(&exe, b"").unwrap();
+            exe
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn finds_onedir_bundle() {
+        let fixture = Fixture::new("onedir");
+        let engine_dir = fixture.dir.join("garage-engine");
+        fs::create_dir(&engine_dir).unwrap();
+        let binary = engine_dir.join(if cfg!(target_os = "windows") {
+            "garage-engine.exe"
+        } else {
+            "garage-engine"
+        });
+        fs::write(&binary, b"").unwrap();
+        assert_eq!(bundled_engine(&fixture.exe()), Some(binary));
+    }
+
+    #[test]
+    fn finds_sibling_binary() {
+        let fixture = Fixture::new("sibling");
+        let binary = fixture.dir.join(if cfg!(target_os = "windows") {
+            "garage-engine.exe"
+        } else {
+            "garage-engine"
+        });
+        fs::write(&binary, b"").unwrap();
+        assert_eq!(bundled_engine(&fixture.exe()), Some(binary));
+    }
+
+    #[test]
+    fn no_engine_found() {
+        let fixture = Fixture::new("missing");
+        assert_eq!(bundled_engine(&fixture.exe()), None);
+    }
 }

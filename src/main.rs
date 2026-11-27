@@ -565,7 +565,7 @@ impl GarageApp {
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child(
-                            "Run scripts/install.sh to build the sidecar, or set GARAGE_ENGINE to a Python interpreter that has the engine on its path.",
+                            "Keep the garage-engine folder beside the app, or set GARAGE_ENGINE to the engine executable. Developers can build the sidecar with scripts/install.sh or scripts/build-windows.ps1.",
                         ),
                 )
                 .into_any_element();

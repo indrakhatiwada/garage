@@ -38,6 +38,13 @@ def check_versions() -> str:
     return version
 
 
+def verify_features(result: dict, version: str, source: str) -> None:
+    features = result.get('features', {})
+    if (not features.get('pdf') or not features.get('c2pa')
+            or result.get('version') != version):
+        raise ValueError(f'Packaged engine from {source} is missing required capabilities/version: {result}')
+
+
 def check_engine(engine: Path, cwd: Path, env: dict[str, str], version: str) -> None:
     result = subprocess.run(
         [str(engine)], input='{"id":"ping","op":"ping","args":{}}\n',
@@ -45,10 +52,24 @@ def check_engine(engine: Path, cwd: Path, env: dict[str, str], version: str) -> 
     )
     replies = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     reply = next((item for item in replies if item.get('id') == 'ping'), {})
-    features = reply.get('result', {}).get('features', {})
-    if (reply.get('event') != 'done' or not features.get('pdf') or not features.get('c2pa')
-            or reply.get('result', {}).get('version') != version):
-        raise ValueError(f'Packaged engine is missing required capabilities/version: {reply}; {result.stderr}')
+    if reply.get('event') != 'done':
+        raise ValueError(f'Packaged engine did not reply to ping: {reply}; {result.stderr}')
+    verify_features(reply.get('result', {}), version, str(engine))
+
+
+def check_app(app: Path, cwd: Path, env: dict[str, str], version: str) -> None:
+    """Launch the packaged app so engine discovery is tested end to end."""
+    result = subprocess.run(
+        [str(app), '--check-engine'], capture_output=True, text=True,
+        cwd=cwd, env=env, timeout=120,
+    )
+    if result.returncode != 0:
+        raise ValueError(
+            f'{app.name} --check-engine failed ({result.returncode}): '
+            f'{result.stdout.strip()} {result.stderr.strip()}'
+        )
+    replies = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    verify_features(replies[-1] if replies else {}, version, str(app))
 
 
 def engine_binary(path: Path) -> Path:
@@ -69,9 +90,11 @@ def check_packages(version: str) -> None:
             with zipfile.ZipFile(archive) as package:
                 package.extractall(work)
             stage = work / f'Garage-{version}-windows-x86_64'
-            if not (stage / 'Garage.exe').is_file():
+            app = stage / 'Garage.exe'
+            if not app.is_file():
                 raise ValueError('Windows package is missing Garage.exe')
             check_engine(engine_binary(stage / 'garage-engine'), work, env, version)
+            check_app(app, stage, env, version)
         else:
             archive = ROOT / f'dist/Garage-{version}-x86_64.tar.gz'
             with tarfile.open(archive) as package:
@@ -81,13 +104,7 @@ def check_packages(version: str) -> None:
             image = ROOT / f'dist/Garage-{version}-x86_64.AppImage'
             subprocess.run([str(image), '--appimage-extract'], cwd=work, env=env,
                            stdout=subprocess.DEVNULL, check=True, timeout=90)
-            result = subprocess.run([str(work / 'squashfs-root/AppRun'), '--check-engine'],
-                                    cwd=work, env=env, capture_output=True, text=True,
-                                    check=True, timeout=90)
-            reply = json.loads(result.stdout)
-            if (not all(reply.get('features', {}).get(name) for name in ('pdf', 'c2pa'))
-                    or reply.get('version') != version):
-                raise ValueError(f'AppImage engine check failed: {reply}')
+            check_app(work / 'squashfs-root/AppRun', work, env, version)
     print('Extracted packages passed engine checks.', flush=True)
 
 

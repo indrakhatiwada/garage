@@ -22,7 +22,7 @@ Build a portable Windows application from a developer PowerShell:
 ./scripts/build-windows.ps1
 ```
 
-Keep `Garage.exe` and `garage-engine.exe` together in the extracted output.
+Keep `Garage.exe` and the `garage-engine` folder together in the extracted output.
 
 Optional system tools: `tesseract` for OCR (with Nepali language data for Nepali text), and `gs` for additional PDF compression.
 

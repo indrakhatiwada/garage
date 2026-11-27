@@ -9,8 +9,8 @@ Run commands from the repository root.
 ```
 
 This creates `dist/Garage-0.1.1-x86_64.AppImage`, a portable `.tar.gz`,
-`dist/garage`, and the frozen `dist/garage-engine`. Keep the two executables
-together when using the bare binary. The AppImage includes both.
+`dist/garage`, and the frozen `dist/garage-engine` folder. Keep the binary
+and the folder together when using the bare binary. The AppImage includes both.
 
 Packaging needs a type-2 AppImage runtime and `mksquashfs`. Set
 `APPIMAGE_RUNTIME` and `MKSQUASHFS` to their paths; the script also finds
@@ -33,8 +33,8 @@ Visual Studio C++ Build Tools/Windows SDK. From a developer PowerShell:
 ./scripts/build-windows.ps1
 ```
 
-The portable ZIP in `dist` contains `Garage.exe` and `garage-engine.exe`.
-Keep them together after extraction. No separate Python installation is needed
+The portable ZIP in `dist` contains `Garage.exe` and a `garage-engine` folder
+(with `garage-engine.exe` inside). Keep them together after extraction. No separate Python installation is needed
 to run it. The **Build and release** GitHub Actions workflow builds both platforms
 and uploads downloadable packages as build artifacts.
 The Windows build has to run on Windows because the Python sidecar is frozen

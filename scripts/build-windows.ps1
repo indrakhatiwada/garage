@@ -30,7 +30,7 @@ Copy-Item assets/brand/garage.ico "$stage/garage.ico" -Force
 @'
 Garage for Windows
 
-Extract this folder and run Garage.exe. Keep garage-engine.exe beside it.
+Extract this folder and run Garage.exe. Keep the garage-engine folder beside it.
 Python is bundled. OCR needs Tesseract on PATH; Ghostscript is optional.
 Source: the Garage repository used to build this package. License: AGPL-3.0-or-later.
 '@ | Set-Content "$stage/README.txt"

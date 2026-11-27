@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller recipe for the Garage engine.
 
-Produces a single `garage-engine` executable. It still shells out to the
+Produces a `garage-engine` folder containing the executable and its libraries. It still shells out to the
 system `tesseract` and `gs` binaries: those are optional features, not
 bundled, so the app can tell you honestly when they are missing.
 """
