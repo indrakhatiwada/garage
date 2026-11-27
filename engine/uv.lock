@@ -360,7 +360,7 @@ wheels = [
 
 [[package]]
 name = "garage-engine"
-version = "0.2.3"
+version = "0.2.4"
 source = { editable = "." }
 dependencies = [
     { name = "c2pa-python" },

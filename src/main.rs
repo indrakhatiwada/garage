@@ -833,6 +833,7 @@ fn main() {
                 {
                     fail(&error.to_string());
                 }
+                return;
             }
             Err(error) => fail(&error),
         }
