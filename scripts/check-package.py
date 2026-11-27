@@ -59,17 +59,23 @@ def check_engine(engine: Path, cwd: Path, env: dict[str, str], version: str) -> 
 
 def check_app(app: Path, cwd: Path, env: dict[str, str], version: str) -> None:
     """Launch the packaged app so engine discovery is tested end to end."""
-    result = subprocess.run(
-        [str(app), '--check-engine'], capture_output=True, text=True,
-        cwd=cwd, env=env, timeout=120,
-    )
-    if result.returncode != 0:
-        raise ValueError(
-            f'{app.name} --check-engine failed ({result.returncode}): '
-            f'{result.stdout.strip()} {result.stderr.strip()}'
+    with tempfile.TemporaryDirectory(prefix='garage-app-check-') as directory:
+        report = Path(directory) / 'engine.json'
+        result = subprocess.run(
+            [str(app), '--check-engine', str(report)], capture_output=True, text=True,
+            cwd=cwd, env=env, timeout=120,
         )
-    replies = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-    verify_features(replies[-1] if replies else {}, version, str(app))
+        detail = f'stdout={result.stdout.strip()!r} stderr={result.stderr.strip()!r}'
+        if result.returncode != 0:
+            raise ValueError(
+                f'{app.name} --check-engine failed ({result.returncode}): {detail}'
+            )
+        if not report.is_file():
+            raise ValueError(f'{app.name} --check-engine wrote no report: {detail}')
+        text = report.read_text().strip()
+        if text.startswith('ERROR:'):
+            raise ValueError(f'{app.name} --check-engine: {text}: {detail}')
+        verify_features(json.loads(text), version, str(app))
 
 
 def engine_binary(path: Path) -> Path:
@@ -114,4 +120,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
     version = check_versions()
     if args.check == 'packages':
-        check_packages(version)
+        try:
+            check_packages(version)
+        except Exception as error:
+            # Surface the failure in the GitHub Actions check annotation.
+            print(f'::error::{error}', flush=True)
+            raise

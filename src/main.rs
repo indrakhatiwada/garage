@@ -795,25 +795,40 @@ fn main() {
         return;
     }
     if std::env::args().any(|arg| arg == "--check-engine") {
-        let engine = Engine::spawn().unwrap_or_else(|error| {
-            eprintln!("{error}");
+        // An optional report path makes this usable from CI even on Windows,
+        // where GUI-subsystem apps have no visible stdout.
+        let args: Vec<String> = std::env::args().collect();
+        let report = args
+            .iter()
+            .position(|arg| arg == "--check-engine")
+            .and_then(|index| args.get(index + 1))
+            .map(PathBuf::from);
+        let fail = |message: &str| -> ! {
+            if let Some(path) = &report {
+                let _ = std::fs::write(path, format!("ERROR: {message}"));
+            }
+            eprintln!("{message}");
             std::process::exit(1);
-        });
+        };
+        let engine = Engine::spawn().unwrap_or_else(|error| fail(&error));
         while let Ok(event) = engine.events().recv_blocking() {
             match event {
                 engine::Event::Done { result, .. } if result.get("features").is_some() => {
-                    println!("{result}");
+                    let line = result.to_string();
+                    println!("{line}");
+                    if let Some(path) = &report
+                        && let Err(error) = std::fs::write(path, &line)
+                    {
+                        fail(&error.to_string());
+                    }
                     engine.kill();
                     return;
                 }
-                engine::Event::Exited(error) => {
-                    eprintln!("{error}");
-                    std::process::exit(1);
-                }
+                engine::Event::Exited(error) => fail(&error),
                 _ => {}
             }
         }
-        std::process::exit(1);
+        fail("engine exited before replying to the check");
     }
     gpui_kit::application()
         .with_assets(brand::Assets)
