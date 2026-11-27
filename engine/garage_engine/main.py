@@ -23,7 +23,7 @@ from typing import Any, Callable
 from . import cleanup, img, ocr, pdf
 from .ops import Ctx, Ops
 
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 
 _write_lock = threading.Lock()
 
