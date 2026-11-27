@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import argparse
 import ast
+from collections.abc import Iterator
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import tomllib
 import zipfile
 
@@ -85,12 +89,32 @@ def engine_binary(path: Path) -> Path:
     return path / ("garage-engine.exe" if platform.system() == 'Windows' else 'garage-engine')
 
 
+@contextmanager
+def package_dir() -> Iterator[Path]:
+    """Extraction directory whose cleanup tolerates brief Windows file locks."""
+    path = Path(tempfile.mkdtemp(prefix='garage-package-'))
+    try:
+        yield path
+    finally:
+        # Native libraries loaded by the packaged engine can stay locked for a
+        # moment after it exits. Retry on Windows instead of failing the whole
+        # check while rmtree races with the OS releasing those handles.
+        attempts = 5 if platform.system() == 'Windows' else 1
+        for attempt in range(attempts):
+            try:
+                shutil.rmtree(path)
+                break
+            except PermissionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.5)
+
+
 def check_packages(version: str) -> None:
     env = os.environ.copy()
     for name in ('GARAGE_ENGINE', 'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV'):
         env.pop(name, None)
-    with tempfile.TemporaryDirectory(prefix='garage-package-') as directory:
-        work = Path(directory)
+    with package_dir() as work:
         if platform.system() == 'Windows':
             archive = ROOT / f'dist/Garage-{version}-windows-x86_64.zip'
             with zipfile.ZipFile(archive) as package:

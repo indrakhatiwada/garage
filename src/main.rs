@@ -811,24 +811,31 @@ fn main() {
             std::process::exit(1);
         };
         let engine = Engine::spawn().unwrap_or_else(|error| fail(&error));
-        while let Ok(event) = engine.events().recv_blocking() {
-            match event {
-                engine::Event::Done { result, .. } if result.get("features").is_some() => {
-                    let line = result.to_string();
-                    println!("{line}");
-                    if let Some(path) = &report
-                        && let Err(error) = std::fs::write(path, &line)
-                    {
-                        fail(&error.to_string());
-                    }
-                    engine.kill();
-                    return;
+        // Always reap the engine before leaving: a surviving child can keep
+        // bundled libraries (notably c2pa_c.dll) locked on Windows while CI
+        // removes the extracted package directory.
+        let outcome = loop {
+            match engine.events().recv_blocking() {
+                Ok(engine::Event::Done { result, .. }) if result.get("features").is_some() => {
+                    break Ok(result.to_string());
                 }
-                engine::Event::Exited(error) => fail(&error),
-                _ => {}
+                Ok(engine::Event::Exited(error)) => break Err(error),
+                Ok(_) => {}
+                Err(_) => break Err("engine exited before replying to the check".to_string()),
             }
+        };
+        engine.kill();
+        match outcome {
+            Ok(line) => {
+                println!("{line}");
+                if let Some(path) = &report
+                    && let Err(error) = std::fs::write(path, &line)
+                {
+                    fail(&error.to_string());
+                }
+            }
+            Err(error) => fail(&error),
         }
-        fail("engine exited before replying to the check");
     }
     gpui_kit::application()
         .with_assets(brand::Assets)

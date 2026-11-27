@@ -201,6 +201,10 @@ impl Engine {
     pub fn kill(&self) {
         if let Ok(mut child) = self.0.child.lock() {
             let _ = child.kill();
+            // Reap the child: on Windows a terminated process can still hold
+            // loaded DLL handles until it is fully gone, which breaks removal
+            // of an extracted package directory right after a CI check.
+            let _ = child.wait();
         }
     }
 }
