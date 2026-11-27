@@ -13,6 +13,7 @@ mod brand;
 mod bs;
 mod engine;
 mod jobs;
+mod success;
 mod views;
 
 use std::path::PathBuf;
@@ -30,14 +31,15 @@ use views::cleanup::CleanupView;
 use views::dates::DatesView;
 use views::images::ImagesView;
 use views::ocr::OcrView;
-use views::pages::PagesView;
 use views::pdf::PdfView;
+use views::pdf_workspace::PdfWorkspace;
 use views::redact::RedactView;
 
-const TOOLS: [Tool; 7] = [
+const TOOLS: [Tool; 8] = [
     Tool::Images,
     Tool::Pdf,
     Tool::Pages,
+    Tool::PdfTools,
     Tool::Dates,
     Tool::Ocr,
     Tool::Redact,
@@ -47,7 +49,8 @@ const TOOLS: [Tool; 7] = [
 struct Views {
     images: Entity<ImagesView>,
     pdf: Entity<PdfView>,
-    pages: Entity<PagesView>,
+    pages: Entity<PdfWorkspace>,
+    pdf_tools: Entity<PdfWorkspace>,
     dates: Entity<DatesView>,
     ocr: Entity<OcrView>,
     redact: Entity<RedactView>,
@@ -61,12 +64,15 @@ pub struct GarageApp {
     jobs: Entity<Jobs>,
     views: Option<Views>,
     output_dir: Option<PathBuf>,
+    pdf_expanded: bool,
     _events: Option<Task<()>>,
+    _success: Entity<success::SuccessFeedback>,
 }
 
 impl GarageApp {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let jobs = cx.new(|_| Jobs::default());
+        let success = cx.new(|cx| success::SuccessFeedback::new(&jobs, window, cx));
         let (engine, error, events) = match Engine::spawn() {
             Ok(engine) => {
                 let rx = engine.events();
@@ -74,7 +80,9 @@ impl GarageApp {
                     while let Ok(event) = rx.recv().await {
                         let alive = this.update(cx, |app, cx| {
                             app.jobs.update(cx, |jobs, cx| {
-                                jobs.apply(event);
+                                if let Some(success) = jobs.apply(event) {
+                                    cx.emit(success);
+                                }
                                 cx.notify();
                             });
                             cx.notify();
@@ -96,7 +104,24 @@ impl GarageApp {
             }),
             pdf: cx.new(|cx| PdfView::new(engine.clone(), jobs.clone(), cx, output_dir.clone())),
             pages: cx.new(|cx| {
-                PagesView::new(engine.clone(), jobs.clone(), window, cx, output_dir.clone())
+                PdfWorkspace::new(
+                    engine.clone(),
+                    jobs.clone(),
+                    Tool::Pages,
+                    window,
+                    cx,
+                    output_dir.clone(),
+                )
+            }),
+            pdf_tools: cx.new(|cx| {
+                PdfWorkspace::new(
+                    engine.clone(),
+                    jobs.clone(),
+                    Tool::PdfTools,
+                    window,
+                    cx,
+                    output_dir.clone(),
+                )
             }),
             dates: cx.new(|cx| DatesView::new(window, cx)),
             ocr: cx.new(|cx| OcrView::new(engine.clone(), jobs.clone(), cx, output_dir.clone())),
@@ -109,12 +134,14 @@ impl GarageApp {
 
         Self {
             tool: Tool::Images,
+            pdf_expanded: true,
             engine,
             error,
             jobs,
             views,
             output_dir,
             _events: events,
+            _success: success,
         }
     }
 
@@ -140,6 +167,9 @@ impl GarageApp {
                             .update(cx, |view, cx| view.set_output_dir(Some(path.clone()), cx));
                         views
                             .pages
+                            .update(cx, |view, cx| view.set_output_dir(Some(path.clone()), cx));
+                        views
+                            .pdf_tools
                             .update(cx, |view, cx| view.set_output_dir(Some(path.clone()), cx));
                         views
                             .ocr
@@ -187,69 +217,156 @@ impl GarageApp {
                 let view = views.cleanup.clone();
                 view.update(cx, |view, cx| view.accept_paths(paths, cx));
             }
+            Tool::PdfTools => {
+                views
+                    .pdf_tools
+                    .update(cx, |view, cx| view.accept_paths(paths, cx));
+            }
             Tool::Dates => {}
         }
     }
 
     fn sidebar(&self, compact: bool, cx: &mut Context<Self>) -> Div {
-        let mut nav = div().flex().flex_col().gap_2().px_3().py_4();
-        for tool in TOOLS {
-            let selected = self.tool == tool;
-            let icon = match tool {
-                Tool::Images => "garage/images.svg",
-                Tool::Pdf => "garage/compress-pdf.svg",
-                Tool::Pages => "garage/pdf-pages.svg",
-                Tool::Dates => "garage/dates.svg",
-                Tool::Ocr => "garage/ocr.svg",
-                Tool::Redact => "garage/redact.svg",
-                Tool::Cleanup => "garage/cleanup.svg",
+        let mut nav = div().flex().flex_col().gap_1().px_3().py_4();
+        for (tool, label, icon) in [
+            (Tool::Images, "Images", "garage/images.svg"),
+            (Tool::Pdf, "PDF tools", "garage/pdf-pages.svg"),
+            (Tool::Ocr, "OCR", "garage/ocr.svg"),
+            (Tool::Cleanup, "Cleanup", "garage/cleanup.svg"),
+            (Tool::Dates, "Dates", "garage/dates.svg"),
+        ] {
+            let pdf = tool == Tool::Pdf;
+            let selected = if pdf {
+                matches!(
+                    self.tool,
+                    Tool::Pdf | Tool::Pages | Tool::PdfTools | Tool::Redact
+                )
+            } else {
+                self.tool == tool
             };
-            let short_label = match tool {
-                Tool::Pdf => "PDF",
-                Tool::Pages => "Pages",
-                _ => tool.label(),
-            };
-            let label = if compact { short_label } else { tool.label() };
-            let mut button = Button::new(SharedString::from(format!("nav-{tool:?}")))
-                .ghost()
-                .w_full()
-                .h(px(if compact { 58. } else { 44. }))
-                .px(if compact { px(4.) } else { px(12.) })
-                .rounded_lg()
-                .selected(selected)
-                .tooltip(tool.label())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.tool = tool;
-                    cx.notify();
-                }));
-            button = button.child(
-                div()
-                    .flex()
-                    .when(compact, |el| el.flex_col())
-                    .items_center()
-                    .gap(if compact { px(4.) } else { px(12.) })
+            nav = nav.child(
+                Button::new(SharedString::from(format!("nav-{tool:?}")))
+                    .ghost()
                     .w_full()
+                    .h(px(42.))
+                    .px_3()
+                    .rounded(px(6.))
+                    .tooltip(label)
+                    .selected(selected)
                     .text_color(if selected {
                         cx.theme().primary
                     } else {
                         cx.theme().muted_foreground
                     })
-                    .child(Icon::default().path(icon).size(px(18.)).flex_shrink_0())
                     .child(
                         div()
-                            .when(compact, |el| el.text_xs())
-                            .when(!compact, |el| el.text_sm())
-                            .font_weight(if selected {
-                                FontWeight::SEMIBOLD
-                            } else {
-                                FontWeight::MEDIUM
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .w_full()
+                            .child(Icon::default().path(icon).size(px(18.)).flex_shrink_0())
+                            .when(!compact, |d| {
+                                d.child(
+                                    div()
+                                        .flex_1()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(label),
+                                )
                             })
-                            .child(label),
-                    ),
+                            .when(!compact && pdf, |d| {
+                                d.child(
+                                    Icon::new(if self.pdf_expanded {
+                                        IconName::ChevronDown
+                                    } else {
+                                        IconName::ChevronRight
+                                    })
+                                    .size(px(14.)),
+                                )
+                            }),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if pdf {
+                            this.pdf_expanded = !this.pdf_expanded;
+                        } else {
+                            this.tool = tool;
+                        }
+                        cx.notify();
+                    })),
             );
-            nav = nav.child(button);
+            if pdf && self.pdf_expanded {
+                let pages_action = self
+                    .views
+                    .as_ref()
+                    .map(|v| v.pages.read(cx).current_action())
+                    .unwrap_or("");
+                let tools_action = self
+                    .views
+                    .as_ref()
+                    .map(|v| v.pdf_tools.read(cx).current_action())
+                    .unwrap_or("");
+                for (id, label, target, action) in [
+                    ("compress", "Compress PDF", Tool::Pdf, ""),
+                    ("organize", "Organize pages", Tool::Pages, "organize"),
+                    ("merge", "Merge / split / extract", Tool::Pages, "legacy"),
+                    ("images-pdf", "Images to PDF", Tool::Pages, "images"),
+                    ("pdf-images", "PDF to images", Tool::Pages, "export"),
+                    ("redact", "Redact documents", Tool::Redact, ""),
+                    ("watermark", "Watermarks", Tool::PdfTools, "watermark"),
+                    ("numbers", "Page numbers", Tool::PdfTools, "numbers"),
+                    ("passwords", "Passwords", Tool::PdfTools, "protect"),
+                ] {
+                    let active = self.tool == target
+                        && match target {
+                            Tool::Pages => pages_action == action,
+                            Tool::PdfTools => {
+                                tools_action == action
+                                    || (action == "protect" && tools_action == "unlock")
+                            }
+                            _ => true,
+                        };
+                    nav = nav.child(
+                        Button::new(SharedString::from(format!("pdf-nav-{id}")))
+                            .ghost()
+                            .w_full()
+                            .h(px(34.))
+                            .tooltip(label)
+                            .selected(active)
+                            .text_color(if active {
+                                cx.theme().primary
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .child(
+                                div()
+                                    .w_full()
+                                    .pl(if compact { px(0.) } else { px(33.) })
+                                    .text_xs()
+                                    .child(if compact {
+                                        label.split_whitespace().next().unwrap_or(label)
+                                    } else {
+                                        label
+                                    }),
+                            )
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.tool = target;
+                                if let Some(views) = &this.views {
+                                    match target {
+                                        Tool::Pages => views
+                                            .pages
+                                            .update(cx, |v, cx| v.select_action(action, w, cx)),
+                                        Tool::PdfTools => views
+                                            .pdf_tools
+                                            .update(cx, |v, cx| v.select_action(action, w, cx)),
+                                        _ => (),
+                                    }
+                                }
+                                cx.notify();
+                            })),
+                    );
+                }
+            }
         }
-
         let output_label = self
             .output_dir
             .as_ref()
@@ -457,6 +574,7 @@ impl GarageApp {
             Tool::Images => views.images.clone().into_any_element(),
             Tool::Pdf => views.pdf.clone().into_any_element(),
             Tool::Pages => views.pages.clone().into_any_element(),
+            Tool::PdfTools => views.pdf_tools.clone().into_any_element(),
             Tool::Dates => views.dates.clone().into_any_element(),
             Tool::Ocr => views.ocr.clone().into_any_element(),
             Tool::Redact => views.redact.clone().into_any_element(),
@@ -612,7 +730,7 @@ impl Render for GarageApp {
                                                 .map(|home| home.join("Documents"))
                                         });
                                         if let Some(path) = path {
-                                            cx.reveal_path(&path);
+                                            cx.open_with_system(&path);
                                         }
                                     })),
                             ),

@@ -1,6 +1,8 @@
 /target
 /dist
+/output
 /tests/*
+!/tests/test_pdf_tools.py
 !/tests/fixtures/
 /tests/fixtures/*
 !/tests/fixtures/bs_anchors.csv

@@ -8,12 +8,14 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::engine::Event;
+use crate::success::Success;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tool {
     Images,
     Pdf,
     Pages,
+    PdfTools,
     Dates,
     Ocr,
     Redact,
@@ -26,6 +28,7 @@ impl Tool {
             Tool::Images => "Images",
             Tool::Pdf => "Compress PDF",
             Tool::Pages => "PDF pages",
+            Tool::PdfTools => "PDF tools",
             Tool::Dates => "Dates",
             Tool::Ocr => "OCR",
             Tool::Redact => "Redact",
@@ -49,6 +52,8 @@ pub struct Job {
     pub note: String,
     pub state: JobState,
     pub log: Vec<String>,
+    /// Only published outputs should acknowledge completion; previews stay quiet.
+    pub exports_file: bool,
 }
 
 impl Job {
@@ -85,6 +90,8 @@ pub struct Jobs {
     saved: HashMap<String, String>,
 }
 
+impl gpui_kit::EventEmitter<Success> for Jobs {}
+
 impl Jobs {
     pub fn start(&mut self, id: String, tool: Tool, note: impl Into<String>) {
         self.map.insert(
@@ -96,12 +103,19 @@ impl Jobs {
                 note: note.into(),
                 state: JobState::Running,
                 log: Vec::new(),
+                exports_file: false,
             },
         );
         self.current.insert(tool, id);
     }
 
-    pub fn apply(&mut self, event: Event) -> bool {
+    pub fn start_export(&mut self, id: String, tool: Tool, note: impl Into<String>) {
+        self.start(id.clone(), tool, note);
+        self.map.get_mut(&id).unwrap().exports_file = true;
+    }
+
+    pub fn apply(&mut self, event: Event) -> Option<Success> {
+        let mut success = None;
         match event {
             Event::Progress { id, pct, note } => {
                 if let Some(job) = self.map.get_mut(&id) {
@@ -121,6 +135,9 @@ impl Jobs {
             }
             Event::Done { id, result } => {
                 if let Some(job) = self.map.get_mut(&id) {
+                    if job.exports_file && job.is_running() {
+                        success = Success::exported(&result);
+                    }
                     job.pct = 100.0;
                     job.note = "done".into();
                     job.state = JobState::Done(result);
@@ -144,7 +161,7 @@ impl Jobs {
                 }
             }
         }
-        true
+        success
     }
 
     pub fn get(&self, id: &Option<String>) -> Option<&Job> {
@@ -181,5 +198,46 @@ impl Jobs {
             .as_ref()
             .and_then(|id| self.saved.get(id))
             .map(String::as_str)
+    }
+}
+
+#[cfg(test)]
+mod success_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn done(id: &str) -> Event {
+        Event::Done {
+            id: id.into(),
+            result: json!({"dst": "/tmp/output.pdf"}),
+        }
+    }
+
+    #[test]
+    fn only_export_jobs_announce_completion_and_only_once() {
+        let mut jobs = Jobs::default();
+        jobs.start("preview".into(), Tool::Pdf, "Rendering");
+        jobs.start_export("export".into(), Tool::Pdf, "Exporting");
+        assert!(jobs.apply(done("preview")).is_none());
+        assert!(jobs.apply(done("unknown")).is_none());
+        assert!(jobs.apply(done("export")).is_some());
+        assert!(jobs.apply(done("export")).is_none());
+    }
+
+    #[test]
+    fn errors_and_cancellation_never_announce_success() {
+        let mut jobs = Jobs::default();
+        for code in ["cancelled", "write_failed"] {
+            jobs.start_export(code.into(), Tool::Images, "Exporting");
+            assert!(
+                jobs.apply(Event::Error {
+                    id: code.into(),
+                    code: code.into(),
+                    message: "Could not write".into(),
+                })
+                .is_none()
+            );
+            assert!(jobs.apply(done(code)).is_none());
+        }
     }
 }

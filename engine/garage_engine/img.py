@@ -145,7 +145,7 @@ def _out_path(src: str, out_dir: str, suffix: str, ext: str) -> str:
     os.makedirs(directory, exist_ok=True)
     candidate = os.path.join(directory, f"{stem}{suffix}{ext}")
     n = 1
-    while os.path.exists(candidate) and os.path.abspath(candidate) != os.path.abspath(src):
+    while os.path.exists(candidate):
         candidate = os.path.join(directory, f"{stem}{suffix}-{n}{ext}")
         n += 1
     return candidate
@@ -170,8 +170,6 @@ def compress(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     keep_icc = bool(args.get("keep_icc", False))
     suffix = str(args.get("suffix", ".min"))
     out_dir = str(args.get("out_dir") or "")
-    if not out_dir:
-        raise ValueError("choose an output folder before compressing")
 
     results: list[dict[str, Any]] = []
     before_total = after_total = 0

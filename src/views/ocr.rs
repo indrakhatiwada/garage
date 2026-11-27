@@ -191,7 +191,11 @@ impl OcrView {
         };
         let id = self.engine.call(op, args);
         self.jobs.update(cx, |jobs, _| {
-            jobs.start(id.clone(), Tool::Ocr, "starting tesseract");
+            if matches!(self.mode, Mode::SearchablePdf) {
+                jobs.start_export(id.clone(), Tool::Ocr, "starting tesseract");
+            } else {
+                jobs.start(id.clone(), Tool::Ocr, "starting tesseract");
+            }
         });
         self.job = Some(id);
         self.text = None;
@@ -231,18 +235,10 @@ impl Render for OcrView {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "No file chosen".into());
 
-        let mut modes = div().flex().flex_wrap().gap_2().items_center();
+        let mut modes = super::segmented(cx).flex_wrap();
         for mode in [Mode::Text, Mode::Dates, Mode::SearchablePdf] {
             let selected = self.mode == mode;
-            let button = Button::new(mode.id())
-                .label(mode.label())
-                .small()
-                .disabled(busy);
-            let button = if selected {
-                button.primary()
-            } else {
-                button.secondary()
-            };
+            let button = super::segment(mode.id(), mode.label(), selected).disabled(busy);
             modes = modes.child(button.on_click(cx.listener(move |this, _, _, cx| {
                 if this.mode == mode {
                     return;

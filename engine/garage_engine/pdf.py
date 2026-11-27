@@ -29,6 +29,7 @@ def _open(path: str, password: str | None = None):
     doc = pymupdf.open(path)
     if doc.needs_pass:
         if not password or not doc.authenticate(password):
+            doc.close()
             raise ValueError("password required")
     return doc
 
@@ -321,41 +322,10 @@ def _out_dir(args: dict[str, Any], src: str) -> str:
 
 
 def pages(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
-    """Reorder / rotate / delete pages in one pass.
+    from .pdf_tools import execute
+    mapped = dict(args, action="organize")
+    return execute(ctx, mapped)
 
-    `order` is a list of 1-based page numbers in the desired sequence; `rotate`
-    is keyed by the *original* 1-based page number.
-    """
-    src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".edited.pdf"))
-    doc = _open(src, args.get("password"))
-    count = doc.page_count
-
-    rotate: dict[str, Any] = args.get("rotate") or {}
-    for key, value in rotate.items():
-        pno = int(key) - 1
-        if 0 <= pno < count:
-            doc[pno].set_rotation((doc[pno].rotation + int(value)) % 360)
-
-    order = args.get("order")
-    if order:
-        wanted = [int(p) - 1 for p in order if 0 <= int(p) - 1 < count]
-        if not wanted:
-            raise ValueError("empty page order")
-        doc.select(wanted)
-    else:
-        drop = {int(p) - 1 for p in (args.get("delete") or [])}
-        if drop:
-            keep = [i for i in range(count) if i not in drop]
-            if not keep:
-                raise ValueError("cannot delete every page")
-            doc.select(keep)
-
-    ctx.step(70, "saving")
-    doc.save(dst, garbage=4, clean=True, deflate=True)
-    doc.close()
-    ctx.step(100, "done")
-    return {"dst": dst, "pages": len(pymupdf.open(dst)), "bytes": _size(dst)}
 
 
 def merge(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
@@ -422,50 +392,17 @@ def extract(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def images_to_pdf(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
-    srcs: list[str] = [str(p) for p in (args.get("srcs") or [])]
-    if not srcs:
-        raise ValueError("no images")
-    dst = str(args["dst"])
-    mode = str(args.get("page_size") or "fit")
-    margin = float(args.get("margin", 0))
-    out = pymupdf.open()
-    for i, path in enumerate(srcs):
-        ctx.step(i / len(srcs) * 90, os.path.basename(path))
-        if mode == "fit":
-            with pymupdf.open(path) as one:
-                out.insert_pdf(one)
-        else:
-            paper = pymupdf.paper_rect(mode if mode in ("a4", "letter", "legal") else "a4")
-            page = out.new_page(width=paper.width, height=paper.height)
-            rect = pymupdf.Rect(
-                margin, margin, paper.width - margin, paper.height - margin
-            )
-            page.insert_image(rect, filename=path, keep_proportion=True)
-    os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
-    out.save(dst, garbage=4, deflate=True)
-    count = out.page_count
-    out.close()
-    ctx.step(100, "done")
-    return {"dst": dst, "pages": count, "bytes": _size(dst)}
+    from .pdf_tools import execute
+    mapped = dict(args, action="images")
+    return execute(ctx, mapped)
+
 
 
 def to_images(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
-    src = str(args["src"])
-    out_dir = str(args.get("out_dir") or os.path.join(os.path.dirname(src), _stem(src)))
-    os.makedirs(out_dir, exist_ok=True)
-    dpi = int(args.get("dpi", 150))
-    fmt = str(args.get("format") or "png").lower()
-    doc = _open(src, args.get("password"))
-    base = _stem(src)
-    files: list[str] = []
-    for pno in range(doc.page_count):
-        ctx.step(pno / doc.page_count * 100, f"page {pno + 1}/{doc.page_count}")
-        pix = doc[pno].get_pixmap(dpi=dpi)
-        path = os.path.join(out_dir, f"{base}-{pno + 1:03d}.{fmt}")
-        pix.save(path)
-        files.append(path)
-    doc.close()
-    return {"dir": out_dir, "files": files, "pages": len(files)}
+    from .pdf_tools import execute
+    mapped = dict(args, action="export")
+    return execute(ctx, mapped)
+
 
 
 def _apply_redactions(page, items: list[dict[str, Any]]) -> None:
@@ -500,6 +437,8 @@ def render(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
     if not (1 <= page_no <= doc.page_count):
         raise ValueError(f"page {page_no} out of range")
     page = doc[page_no - 1]
+    if args.get("rotation"):
+        page.set_rotation((page.rotation + int(args["rotation"])) % 360)
     boxes = [box for box in (args.get("boxes") or []) if int(box.get("page", 1)) == page_no]
     if boxes:
         _apply_redactions(page, boxes)
@@ -579,96 +518,33 @@ _POSITIONS = {
 }
 
 
-def _fade(color: tuple[float, ...], opacity: float) -> tuple[float, ...]:
-    """Fake text opacity by blending toward paper white.
-
-    PyMuPDF's insert_text has no alpha channel, and this is only ever used for
-    stamps and watermarks on document pages, which are white.
-    """
-    opacity = max(0.0, min(1.0, opacity))
-    return tuple(1.0 - (1.0 - c) * opacity for c in color)
-
-
 def stamp(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
-    src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".stamped.pdf"))
-    text = str(args.get("text") or "")
-    mode = str(args.get("mode") or "text")
-    position = str(args.get("position") or ("bottom-center" if mode == "numbers" else "center"))
-    size = float(args.get("fontsize", 12))
-    opacity = float(args.get("opacity", 1.0))
-    color = tuple(args.get("color") or (0.35, 0.35, 0.35))
-    start = int(args.get("start_page", 1))
-    rotate = int(args.get("rotate", 0))
-
-    doc = _open(src, args.get("password"))
-    total = doc.page_count
-    for pno in range(start - 1, total):
-        ctx.step(pno / max(1, total) * 95, f"page {pno + 1}/{total}")
-        page = doc[pno]
-        body = text.replace("{page}", str(pno + 1)).replace("{total}", str(total))
-        if not body:
-            continue
-        fx, fy = _POSITIONS.get(position, (0.5, 0.5))
-        if mode == "watermark":
-            fontsize = float(args.get("fontsize", 54))
-            tw = pymupdf.get_text_length(body, fontname="helv", fontsize=fontsize)
-            point = pymupdf.Point((page.rect.width - tw) / 2, page.rect.height / 2)
-            page.insert_text(
-                point,
-                body,
-                fontsize=fontsize,
-                color=_fade(color, 0.16),
-                rotate=45,
-                overlay=True,
-            )
-            continue
-        tw = pymupdf.get_text_length(body, fontname="helv", fontsize=size)
-        x = page.rect.width * fx - tw / 2
-        y = page.rect.height * fy
-        page.insert_text(
-            pymupdf.Point(x, y),
-            body,
-            fontsize=size,
-            color=_fade(color, opacity),
-            rotate=rotate,
-            overlay=True,
-        )
-    doc.save(dst, garbage=4, deflate=True)
-    doc.close()
-    ctx.step(100, "done")
-    return {"dst": dst, "pages": total, "bytes": _size(dst)}
+    from .pdf_tools import execute
+    mapped = dict(args, action="watermark")
+    mapped["action"] = "numbers" if args.get("mode") == "numbers" else "watermark"
+    mapped.setdefault("diagonal", args.get("mode") == "watermark")
+    if not args.get("pages") and args.get("start_page"):
+        with _open(str(args["src"]), args.get("password")) as doc:
+            mapped["pages"] = f'{int(args["start_page"])}-{doc.page_count}'
+    mapped.setdefault("text", "")
+    mapped.setdefault("fontsize", 54 if args.get("mode") == "watermark" else 12)
+    mapped.setdefault("opacity", .16 if args.get("mode") == "watermark" else 1)
+    return execute(ctx, mapped)
 
 
 # ---------------------------------------------------------------------- passwords
 
 
 def protect(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
-    src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".locked.pdf"))
-    user_pw = str(args.get("password") or "")
-    if len(user_pw) < 4:
-        raise ValueError("password must be at least 4 characters")
-    doc = _open(src, args.get("password"))
-    doc.save(
-        dst,
-        encryption=pymupdf.PDF_ENCRYPT_AES_256,
-        user_pw=user_pw,
-        owner_pw=str(args.get("owner_password") or user_pw),
-        permissions=int(args.get("permissions", -1)),
-        garbage=4,
-        deflate=True,
-    )
-    doc.close()
-    ctx.step(100, "done")
-    return {"dst": dst, "bytes": _size(dst)}
+    from .pdf_tools import execute
+    mapped = dict(args, action="protect")
+    mapped["source_password"] = args.get("source_password", args.get("password"))
+    mapped["new_password"] = args.get("password", "")
+    return execute(ctx, mapped)
+
 
 
 def unlock(ctx: Ctx, args: dict[str, Any]) -> dict[str, Any]:
-    src = str(args["src"])
-    dst = str(args.get("dst") or os.path.join(_out_dir(args, src), _stem(src) + ".unlocked.pdf"))
-    doc = _open(src, args.get("password"))
-    doc.save(dst, encryption=pymupdf.PDF_ENCRYPT_NONE, garbage=4, deflate=True)
-    doc.close()
-    ctx.step(100, "done")
-    return {"dst": dst, "bytes": _size(dst)}
+    from .pdf_tools import execute
+    mapped = dict(args, action="unlock")
+    return execute(ctx, mapped)

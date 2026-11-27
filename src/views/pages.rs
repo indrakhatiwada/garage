@@ -32,6 +32,8 @@ pub struct PagesView {
     range_text: String,
     job: Option<String>,
     output_dir: Option<PathBuf>,
+    choices: super::ChoiceStore,
+    choice_events: Vec<Subscription>,
     _observe: Subscription,
     _input: Subscription,
 }
@@ -53,6 +55,8 @@ impl PagesView {
             }
         });
         Self {
+            choices: super::ChoiceStore::new(),
+            choice_events: vec![],
             engine,
             jobs,
             files: Vec::new(),
@@ -143,7 +147,7 @@ impl PagesView {
         };
         let id = self.engine.call(op, args);
         self.jobs.update(cx, |jobs, _| {
-            jobs.start(id.clone(), Tool::Pages, "queued");
+            jobs.start_export(id.clone(), Tool::Pages, "queued");
         });
         self.job = Some(id);
         cx.notify();
@@ -194,7 +198,7 @@ impl Render for PagesView {
         let result = job.as_ref().and_then(|j| j.result()).cloned();
         let can_run = self.can_run();
 
-        let mut mode_row = div().flex().flex_wrap().gap_2().items_center();
+        let mut mode_row = super::segmented(cx).flex_wrap();
         for mode in [Mode::Merge, Mode::Split, Mode::Extract] {
             let selected = self.mode == mode;
             let (id, label) = match mode {
@@ -202,12 +206,7 @@ impl Render for PagesView {
                 Mode::Split => ("pages-split", "Split"),
                 Mode::Extract => ("pages-extract", "Extract pages"),
             };
-            let button = Button::new(id).label(label).small();
-            let button = if selected {
-                button.primary()
-            } else {
-                button.secondary()
-            };
+            let button = super::segment(id, label, selected);
             mode_row = mode_row.child(button.on_click(cx.listener(move |this, _, _, cx| {
                 this.mode = mode;
                 if mode == Mode::Merge && this.files.len() < 2 {
@@ -286,26 +285,36 @@ impl Render for PagesView {
                 ));
             }
             Mode::Split => {
-                let mut every_row = div().flex().flex_wrap().gap_2().items_center();
-                for every in [1u32, 2, 5, 10] {
-                    let selected = self.every == every;
-                    let button = Button::new(SharedString::from(format!("every-{every}")))
-                        .label(format!("{every} page(s)"))
-                        .small();
-                    let button = if selected {
-                        button.primary()
-                    } else {
-                        button.ghost()
-                    };
-                    every_row =
-                        every_row.child(button.on_click(cx.listener(move |this, _, _, cx| {
-                            this.every = every;
-                            cx.notify();
-                        })));
-                }
+                let current = self.every.to_string();
+                let every_row = super::choice(
+                    &mut self.choices,
+                    &mut self.choice_events,
+                    "split-size",
+                    vec![
+                        ("1", "Every page"),
+                        ("2", "Every 2 pages"),
+                        ("5", "Every 5 pages"),
+                        ("10", "Every 10 pages"),
+                    ],
+                    &current,
+                    busy,
+                    window,
+                    cx,
+                    |t, value, _, cx| {
+                        t.every = value.parse().unwrap_or(1);
+                        cx.notify();
+                    },
+                );
                 body = body
-                    .child(field_label("Split every", cx))
-                    .child(every_row)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .max_w(px(320.))
+                            .child(field_label("Split into", cx))
+                            .child(every_row),
+                    )
                     .child(note("Writes one file per chunk, named by page range.", cx));
             }
             Mode::Extract => {
